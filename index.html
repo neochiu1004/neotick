@@ -1,0 +1,1969 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>離線票券管家 (V2.1 Multi-Image)</title>
+    
+    <!-- 1. 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. 引入 Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- 3. 引入本地繪製條碼與QR Code的函式庫 -->
+    <script src="https://cdn.jsdelivr.net/npm/bwip-js@3.0.4/dist/bwip-js-min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+
+    <!-- 4. 設定 Import Map -->
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.294.0"
+      }
+    }
+    </script>
+
+    <script>
+        tailwind.config = {
+            darkMode: 'class', // 啟用手動切換深色模式
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#2563EB',
+                        darkBg: '#0f172a', // slate-900
+                        darkCard: '#1e293b', // slate-800
+                    },
+                    animation: {
+                        'pulse-red': 'pulse-red 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'bounce-slight': 'bounce-slight 1s infinite',
+                    },
+                    keyframes: {
+                        'pulse-red': {
+                            '0%, 100%': { borderColor: 'rgba(220, 38, 38, 0.6)', boxShadow: '0 0 0 0 rgba(220, 38, 38, 0.2)' },
+                            '50%': { borderColor: 'rgba(220, 38, 38, 1)', boxShadow: '0 0 15px 4px rgba(220, 38, 38, 0.4)' },
+                        },
+                        'bounce-slight': {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-3px)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; -webkit-tap-highlight-color: transparent; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-in { animation: fadeIn 0.3s ease-out forwards; }
+        canvas { max-width: 100%; height: auto; }
+
+        /* --- Ticket Shape CSS --- */
+        .ticket-card {
+            position: relative;
+            /* 預設變數，會在 JS 中根據深色模式切換 */
+            --card-bg: #ffffff; 
+            background: radial-gradient(circle at 0 2.5rem, transparent 0.75rem, var(--card-bg) 0.76rem) top left,
+                        radial-gradient(circle at 100% 2.5rem, transparent 0.75rem, var(--card-bg) 0.76rem) top right;
+            background-size: 51% 100%;
+            background-repeat: no-repeat;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.08));
+        }
+
+        .dark .ticket-card {
+            --card-bg: #1e293b; /* slate-800 */
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+        }
+        
+        .ticket-divider {
+            border-top: 2px dashed #cbd5e1; /* slate-300 */
+            margin: 0.5rem -1rem; /* Extend to edges */
+            position: relative;
+            opacity: 0.6;
+        }
+        .dark .ticket-divider {
+            border-color: #475569; /* slate-600 */
+        }
+        
+        /* 浮水印 */
+        .watermark-used {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-15deg);
+            font-size: 3rem;
+            font-weight: 900;
+            color: rgba(0,0,0,0.05);
+            pointer-events: none;
+            border: 4px solid rgba(0,0,0,0.05);
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            text-transform: uppercase;
+            z-index: 0;
+        }
+        .dark .watermark-used {
+            color: rgba(255,255,255,0.05);
+            border-color: rgba(255,255,255,0.05);
+        }
+    </style>
+</head>
+<body class="bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-100 transition-colors duration-300">
+    
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useMemo, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { 
+            Trash2, Calendar, Check, Plus, LogIn, ExternalLink, Tag, RotateCcw, 
+            CheckCircle2, ListTodo, Clock, StickyNote, Save, X, ScanBarcode, 
+            Pencil, ClipboardPaste, ArrowRightLeft, Copy, CheckSquare, Trash, 
+            RefreshCcw, Search, FolderPlus, AlertCircle, MoreVertical, Copy as CopyIcon, Link as LinkIcon,
+            Image as ImageIcon, Upload, Clipboard, ClipboardList, AlertTriangle, Download, FileJson, Database, FolderInput,
+            LayoutDashboard, Moon, Sun, ChevronUp, ChevronDown, Filter, AlertOctagon, CheckSquare as CheckSquareIcon,
+            Bell, BellRing, Send, UserCheck, CloudCog, Maximize2, Wand2, WifiOff, FileUp, Replace, FilePlus2, RefreshCw,
+            ImagePlus, Heart, HeartHandshake, Eye, EyeOff, Globe, BookOpen, Star, History, MousePointerClick
+        } from 'lucide-react';
+
+        // --- Helpers ---
+        const compressImage = (fileOrUrl) => {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.crossOrigin = "Anonymous"; 
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    let width = img.width;
+                    let height = img.height;
+                    const MAX_WIDTH = 800; 
+                    const MAX_HEIGHT = 800;
+                    if (width > height) { if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } } 
+                    else { if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; } }
+                    canvas.width = width; canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    try {
+                        resolve(canvas.toDataURL('image/jpeg', 0.6));
+                    } catch (e) {
+                        reject(new Error("Canvas tainted"));
+                    }
+                };
+                img.onerror = (err) => reject(err);
+                
+                if (typeof fileOrUrl === 'string') {
+                    img.src = fileOrUrl;
+                } else {
+                    const reader = new FileReader();
+                    reader.onload = (e) => { img.src = e.target.result; };
+                    reader.readAsDataURL(fileOrUrl);
+                }
+            });
+        };
+
+        const getClipboardImage = async () => {
+            try {
+                if (!navigator.clipboard || !navigator.clipboard.read) {
+                    alert("您的瀏覽器不支援讀取剪貼簿圖片功能，或網站未在安全環境(HTTPS/Localhost)下執行。");
+                    return null;
+                }
+                const items = await navigator.clipboard.read();
+                for (const item of items) {
+                    const imageType = item.types.find(type => type.startsWith('image/'));
+                    if (imageType) {
+                        const blob = await item.getType(imageType);
+                        return await compressImage(blob);
+                    }
+                }
+                alert("剪貼簿中沒有偵測到圖片。");
+                return null;
+            } catch (err) {
+                console.error("Clipboard read error:", err);
+                return null;
+            }
+        };
+
+        const sendTelegramMessage = async (token, chatId, text) => {
+            if (!token || !chatId || !text) return false;
+            const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(text)}&parse_mode=Markdown`;
+            try { await fetch(url, { mode: 'no-cors' }); return true; } catch (error) { console.error("TG Send Error:", error); return false; }
+        };
+
+        // --- 1. 改進後的智慧辨識邏輯 (V2) ---
+        const parseTicketInfo = (text) => {
+            const result = { isTicket: false, serial: '', productName: '', expiry: '', originalText: text };
+            
+            const serialMatch = text.match(/(?:票券序號|序號|CODE|Code|密碼|PIN)[:：\s]*([A-Za-z0-9\-\s]{8,})/i);
+            
+            if (serialMatch) { 
+                const candidate = serialMatch[1].trim();
+                if (candidate.length > 8 && !candidate.startsWith('202') && !candidate.includes('/')) { 
+                    result.isTicket = true; 
+                    result.serial = candidate;
+                }
+            } 
+            
+            if (!result.serial) {
+                const potentialCodes = text.match(/\b[A-Za-z0-9\-]{9,30}\b/g);
+                if (potentialCodes) {
+                    const validCodes = potentialCodes.filter(code => {
+                        if (code.length <= 8) return false;
+                        if (code.startsWith('202')) return false;
+                        if (code.includes('/')) return false;
+                        if (/^19\d{6}$/.test(code)) return false;
+                        return true;
+                    });
+
+                    if (validCodes.length > 0) {
+                        const strongCandidate = validCodes.find(code => 
+                            (code.match(/[A-Za-z]/) && code.match(/[0-9]/)) || 
+                            code.includes('-')
+                        );
+                        const finalChoice = strongCandidate || validCodes[0];
+                        if (finalChoice) {
+                            result.isTicket = true;
+                            result.serial = finalChoice;
+                        }
+                    }
+                }
+            }
+
+            const dateRegex = /(\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2})/g;
+            const dateMatches = text.match(dateRegex);
+            if (dateMatches && dateMatches.length > 0) result.expiry = dateMatches[dateMatches.length - 1];
+            
+            const nameMatch = text.match(/【(.*?)】/);
+            if (nameMatch) { result.productName = nameMatch[1]; } 
+            else if (result.isTicket || text.length > 0) {
+                const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+                const likelyName = lines.find(l => 
+                    l.length > 2 && l.length < 30 && 
+                    !l.includes('序號') && !l.includes('期限') && 
+                    (!result.serial || !l.includes(result.serial)) &&
+                    !l.match(/^\d{4}[\/\-\.]\d{2}/) && 
+                    !l.match(/^\d+$/) && 
+                    (l.includes('元') || l.includes('券') || l.includes('飲') || l.includes('餐') || l.includes('堡') || l.includes('咖啡') || l.includes('折') || l.includes('兌換') || l.includes('蛋'))
+                );
+                result.productName = likelyName || (lines[0] || "未命名票券");
+            }
+            if (!result.productName) result.productName = "未命名票券";
+            return result;
+        };
+
+        const checkIsExpiringSoon = (expiryStr, thresholdDays) => {
+            if (!expiryStr) return false;
+            const normalizedDate = expiryStr.replace(/[\.\-]/g, '/');
+            const expiryDate = new Date(normalizedDate);
+            if (isNaN(expiryDate.getTime())) return false;
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            const diffTime = expiryDate - today;
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            return diffDays <= thresholdDays; 
+        };
+
+        const getDaysRemaining = (expiryStr) => {
+            if (!expiryStr) return 999;
+            const normalizedDate = expiryStr.replace(/[\.\-]/g, '/');
+            const expiryDate = new Date(normalizedDate);
+            if (isNaN(expiryDate.getTime())) return 999;
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            const diffTime = expiryDate - today;
+            return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        };
+
+        const getTagColorClass = (tag, isDark) => {
+            if (!tag || tag === 'default') return isDark ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-600';
+            const colors = [
+                isDark ? 'bg-orange-900/40 text-orange-200 border-orange-800' : 'bg-orange-50 text-orange-700 border-orange-100',
+                isDark ? 'bg-blue-900/40 text-blue-200 border-blue-800' : 'bg-blue-50 text-blue-700 border-blue-100',
+                isDark ? 'bg-emerald-900/40 text-emerald-200 border-emerald-800' : 'bg-emerald-50 text-emerald-700 border-emerald-100',
+                isDark ? 'bg-purple-900/40 text-purple-200 border-purple-800' : 'bg-purple-50 text-purple-700 border-purple-100',
+                isDark ? 'bg-pink-900/40 text-pink-200 border-pink-800' : 'bg-pink-50 text-pink-700 border-pink-100',
+                isDark ? 'bg-cyan-900/40 text-cyan-200 border-cyan-800' : 'bg-cyan-50 text-cyan-700 border-cyan-100',
+            ];
+            let hash = 0;
+            for (let i = 0; i < tag.length; i++) hash = tag.charCodeAt(i) + ((hash << 5) - hash);
+            return colors[Math.abs(hash) % colors.length];
+        };
+
+        const copyToClipboard = async (text) => {
+            if (!text) return false;
+            try { await navigator.clipboard.writeText(text); return true; } 
+            catch (err) {
+                try {
+                    const textArea = document.createElement("textarea"); textArea.value = text;
+                    textArea.style.position = "fixed"; document.body.appendChild(textArea); textArea.focus(); textArea.select();
+                    const successful = document.execCommand('copy'); document.body.removeChild(textArea); return successful;
+                } catch (fallbackErr) { return false; }
+            }
+        };
+
+        // --- Components ---
+        const QRCodeCanvas = ({ text, size = 150 }) => {
+            const canvasRef = useRef(null);
+            useEffect(() => { if (canvasRef.current && window.QRious) new window.QRious({ element: canvasRef.current, value: text, size: size, level: 'H' }); }, [text, size]);
+            return <div className="flex flex-col items-center p-2 bg-white rounded-lg border shadow-sm"><span className="text-[10px] text-gray-400 mb-1 uppercase tracking-wider">QR Code</span><canvas ref={canvasRef} /></div>;
+        };
+
+        const BarcodeCanvas = ({ text }) => {
+            const canvasRef = useRef(null);
+            useEffect(() => { if (canvasRef.current && window.bwipjs) try { window.bwipjs.toCanvas(canvasRef.current, { bcid: 'code128', text: text, scale: 3, height: 10, includetext: true, textxalign: 'center' }); } catch (e) {} }, [text]);
+            return <div className="flex flex-col items-center w-full p-2 bg-white rounded-lg border shadow-sm"><span className="text-[10px] text-gray-400 mb-1 uppercase tracking-wider">Barcode</span><canvas ref={canvasRef} className="max-w-full h-auto" /></div>;
+        };
+        
+        const ImagePreviewModal = ({ src, onClose, allImages }) => {
+            // Simple previewer - if allImages provided we could add swiping, but for now just single image
+            if (!src) return null;
+            return (
+                <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
+                    <button className="absolute top-4 right-4 text-white p-2 bg-black/50 hover:bg-black/80 rounded-full transition-colors backdrop-blur-md border border-white/20 shadow-lg z-[70]"><X size={32}/></button>
+                    <img src={src} className="max-w-full max-h-full object-contain rounded shadow-2xl" onClick={e => e.stopPropagation()}/>
+                    {/* Future: Add carousel if allImages.length > 1 */}
+                </div>
+            );
+        };
+
+        const RawDataModal = ({ content, onClose }) => {
+            if (!content && content !== "") return null;
+            return (
+                <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-slate-200 dark:border-slate-700 relative flex flex-col max-h-[80vh]" onClick={e=>e.stopPropagation()}>
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-bold text-lg dark:text-white flex items-center gap-2"><Eye size={20}/> 原始資料查看</h3>
+                            <button onClick={onClose}><X size={20} className="text-slate-400"/></button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto bg-slate-100 dark:bg-slate-900 p-4 rounded-xl font-mono text-xs whitespace-pre-wrap break-all dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                            {content}
+                        </div>
+                        <div className="mt-4 text-center text-xs text-slate-400">
+                            此為系統解析前的原始內容 (Hidden Field)
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const GalleryModal = ({ isOpen, onClose, images, onSelect, onDelete, onAddImage }) => {
+            const fileInputRef = useRef(null);
+            
+            if(!isOpen) return null;
+
+            const handleFileSelect = async (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    try {
+                        const compressed = await compressImage(file);
+                        onAddImage(compressed);
+                    } catch (err) {
+                        alert("圖片處理失敗");
+                    }
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 z-[80] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden" onClick={e=>e.stopPropagation()}>
+                        <div className="p-4 border-b dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800">
+                            <div className="flex items-center gap-3">
+                                <h3 className="font-bold text-lg dark:text-white flex items-center gap-2"><ImagePlus size={20} className="text-pink-500"/> 常用圖庫</h3>
+                                <button onClick={() => fileInputRef.current.click()} className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-lg font-bold hover:bg-blue-200 flex items-center gap-1">
+                                    <Plus size={14}/> 上傳圖片
+                                </button>
+                                <input type="file" hidden ref={fileInputRef} accept="image/*" onChange={handleFileSelect}/>
+                            </div>
+                            <button onClick={onClose}><X size={20} className="text-slate-400"/></button>
+                        </div>
+                        <div className="p-4 overflow-y-auto flex-1 bg-slate-100 dark:bg-slate-900/50">
+                            {images.length === 0 ? (
+                                <div className="text-center py-10 text-slate-400">
+                                    <ImagePlus size={48} className="mx-auto mb-2 opacity-50"/>
+                                    <p>圖庫是空的</p>
+                                    <p className="text-xs">您可以點擊上方「上傳圖片」新增</p>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                                    {images.map((img, idx) => (
+                                        <div key={idx} className="relative group aspect-square rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-white cursor-pointer shadow-sm hover:ring-2 hover:ring-blue-500 transition-all" onClick={() => { onSelect(img); onClose(); }}>
+                                            <img src={img} className="w-full h-full object-cover"/>
+                                            <button onClick={(e) => { e.stopPropagation(); onDelete(idx); }} className="absolute top-1 right-1 bg-red-500/80 hover:bg-red-600 text-white p-1 rounded-full backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <Trash2 size={12}/>
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const TagManagerModal = ({ isOpen, onClose, tags, onAddTag, onDeleteTag, onRenameTag }) => {
+            const [newTag, setNewTag] = useState('');
+            const [editingTag, setEditingTag] = useState(null); 
+            const [editValue, setEditValue] = useState(''); 
+            if (!isOpen) return null;
+            const startEdit = (tag) => { setEditingTag(tag); setEditValue(tag); };
+            const saveEdit = () => { if (editValue.trim() && editValue !== editingTag) { onRenameTag(editingTag, editValue.trim()); } setEditingTag(null); };
+            
+            return (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in">
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-slate-100 dark:border-slate-700">
+                        <div className="flex justify-between items-center mb-4"><h2 className="text-lg font-bold flex items-center gap-2 dark:text-white"><FolderPlus size={20} className="text-blue-600 dark:text-blue-400"/> 管理標籤</h2><button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button></div>
+                        <div className="flex gap-2 mb-4"><input type="text" value={newTag} onChange={(e) => setNewTag(e.target.value)} placeholder="新標籤名稱" className="flex-1 px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white" /><button onClick={() => { if(newTag.trim()) { onAddTag(newTag.trim()); setNewTag(''); } }} className="bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700"><Plus size={18}/></button></div>
+                        <div className="max-h-[300px] overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                            {tags.length === 0 ? <p className="text-slate-400 text-sm text-center py-8">尚無自訂標籤</p> : tags.map(tag => (
+                                <div key={tag} className="flex justify-between items-center bg-slate-50 dark:bg-slate-700/50 p-2.5 rounded-lg border border-slate-100 dark:border-slate-700 group">
+                                    {editingTag === tag ? (
+                                        <div className="flex gap-2 flex-1 items-center"><input type="text" value={editValue} onChange={(e) => setEditValue(e.target.value)} className="flex-1 bg-white dark:bg-slate-600 px-2 py-1 rounded border border-blue-300 outline-none text-sm dark:text-white" autoFocus /><button onClick={saveEdit} className="text-green-600 hover:bg-green-50 p-1 rounded"><Check size={16}/></button><button onClick={() => setEditingTag(null)} className="text-slate-400 hover:bg-slate-100 p-1 rounded"><X size={16}/></button></div>
+                                    ) : (
+                                        <><span className="text-slate-700 dark:text-slate-200 font-medium text-sm pl-1">{tag}</span><div className="flex gap-1"><button onClick={() => startEdit(tag)} className="text-slate-400 hover:text-blue-600 p-1.5 hover:bg-blue-50 dark:hover:bg-slate-600 rounded"><Pencil size={14}/></button><button onClick={() => { if(confirm(`確定刪除標籤「${tag}」嗎？`)) onDeleteTag(tag); }} className="text-slate-400 hover:text-red-600 p-1.5 hover:bg-red-50 dark:hover:bg-slate-600 rounded"><Trash2 size={14}/></button></div></>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const PresetManagerModal = ({ isOpen, onClose, presets, onAddPreset, onDeletePreset }) => {
+            const [newPreset, setNewPreset] = useState('');
+            if (!isOpen) return null;
+            
+            return (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in">
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-slate-100 dark:border-slate-700">
+                        <div className="flex justify-between items-center mb-4"><h2 className="text-lg font-bold flex items-center gap-2 dark:text-white"><BookOpen size={20} className="text-purple-600 dark:text-purple-400"/> 管理常用品名</h2><button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button></div>
+                        <div className="flex gap-2 mb-4"><input type="text" value={newPreset} onChange={(e) => setNewPreset(e.target.value)} placeholder="輸入品名..." className="flex-1 px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-purple-500 text-sm bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white" /><button onClick={() => { if(newPreset.trim()) { onAddPreset(newPreset.trim()); setNewPreset(''); } }} className="bg-purple-600 text-white px-3 py-2 rounded-lg hover:bg-purple-700"><Plus size={18}/></button></div>
+                        <div className="max-h-[300px] overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                            {presets.length === 0 ? <p className="text-slate-400 text-sm text-center py-8">尚無常用資料</p> : presets.map(name => (
+                                <div key={name} className="flex justify-between items-center bg-slate-50 dark:bg-slate-700/50 p-2.5 rounded-lg border border-slate-100 dark:border-slate-700 group">
+                                    <span className="text-slate-700 dark:text-slate-200 font-medium text-sm pl-1 truncate">{name}</span>
+                                    <button onClick={() => { if(confirm(`確定刪除「${name}」嗎？`)) onDeletePreset(name); }} className="text-slate-400 hover:text-red-600 p-1.5 hover:bg-red-50 dark:hover:bg-slate-600 rounded"><Trash2 size={14}/></button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const TaskItem = ({ task, tags, onToggle, onDelete, onRestore, onPermanentDelete, onUpdateTicket, isSelectionMode, isSelected, onSelect, expiryThreshold, isDuplicate, isDarkMode, onManageTags, onPreviewImage, gallery, onAddToGallery, presetNames, onManagePresets }) => {
+            const [showCodes, setShowCodes] = useState(false);
+            const [justCopied, setJustCopied] = useState(false);
+            const [isEditing, setIsEditing] = useState(false);
+            const [showRaw, setShowRaw] = useState(false);
+            
+            // Edit States
+            const [editName, setEditName] = useState(task.productName || task.text || '');
+            const [editSerial, setEditSerial] = useState(task.serial || '');
+            const [editExpiry, setEditExpiry] = useState(task.expiry || '');
+            const [editCreatedAt, setEditCreatedAt] = useState(''); 
+            const [editNote, setEditNote] = useState(task.note || '');
+            const [editTag, setEditTag] = useState(task.tag || 'default');
+            
+            // Image Editing (Multiple)
+            const [editImages, setEditImages] = useState(task.images || (task.image ? [task.image] : []));
+            const [editMainImage, setEditMainImage] = useState(task.image || ''); // The current cover
+            const [showGallery, setShowGallery] = useState(false);
+            const [editUrlInput, setEditUrlInput] = useState('');
+
+            // Init State
+            useEffect(() => {
+                if (isEditing) {
+                    const d = task.createdAt ? new Date(task.createdAt) : new Date();
+                    const yyyy = d.getFullYear();
+                    const mm = String(d.getMonth() + 1).padStart(2, '0');
+                    const dd = String(d.getDate()).padStart(2, '0');
+                    setEditCreatedAt(`${yyyy}-${mm}-${dd}`);
+                    
+                    // Sync images
+                    setEditImages(task.images || (task.image ? [task.image] : []));
+                    setEditMainImage(task.image || '');
+                }
+            }, [isEditing, task]);
+
+            const isCompleted = task.completed;
+            const isDeleted = task.isDeleted;
+            const isExpiring = !isCompleted && !isDeleted && task.expiry && checkIsExpiringSoon(task.expiry, expiryThreshold);
+            
+            const tagColor = getTagColorClass(task.tag, isDarkMode);
+            let cardClasses = `ticket-card w-full mb-3 transition-all duration-300 relative overflow-hidden group `;
+            
+            if (isDeleted) cardClasses += 'opacity-70 grayscale ';
+            if (isSelected) cardClasses += 'ring-2 ring-blue-500 transform scale-[1.01] ';
+            
+            if (isDuplicate && !isDeleted) {
+                cardClasses += 'border-2 border-red-500 shadow-xl shadow-red-200 dark:shadow-red-900/40 animate-pulse-red z-10 ';
+            } else if (isExpiring && !isDeleted) {
+                cardClasses += 'border border-red-300 shadow-md shadow-red-100 ';
+            }
+
+            const getDatePickerValue = (dateStr) => {
+                if(!dateStr) return '';
+                return dateStr.replace(/\//g, '-').replace(/\./g, '-');
+            };
+
+            const handleCopy = async (e) => {
+                e.stopPropagation();
+                if(task.serial && await copyToClipboard(task.serial)) {
+                    setJustCopied(true); setTimeout(() => setJustCopied(false), 2000);
+                }
+            };
+
+            const handleSaveEdit = () => {
+                const formattedExpiry = editExpiry.replace(/-/g, '/');
+                let newCreatedAt = task.createdAt;
+                if (editCreatedAt) {
+                    const d = new Date(editCreatedAt);
+                    d.setHours(12,0,0,0); 
+                    newCreatedAt = d.getTime();
+                }
+
+                // If main image is not in list (shouldn't happen), use first of list, or just keep as is
+                // Ensure editMainImage is still valid
+                let finalMainImage = editMainImage;
+                if (editImages.length > 0 && !editImages.includes(editMainImage)) {
+                    finalMainImage = editImages[0];
+                } else if (editImages.length === 0) {
+                    finalMainImage = '';
+                }
+
+                onUpdateTicket(task.id, editName, editSerial, formattedExpiry, finalMainImage, editImages, '', editNote, editTag, newCreatedAt);
+                setIsEditing(false);
+            };
+
+            const handleImageUpload = async (e) => {
+                const files = Array.from(e.target.files);
+                if(files.length > 0) {
+                    for (const file of files) {
+                        try {
+                            const compressed = await compressImage(file);
+                            setEditImages(prev => [...prev, compressed]);
+                            if (!editMainImage) setEditMainImage(compressed);
+                        } catch(err) { console.error(err); }
+                    }
+                }
+            };
+            
+            const handleAddFromGallery = (img) => {
+                setEditImages(prev => [...prev, img]);
+                if (!editMainImage) setEditMainImage(img);
+            };
+
+            const handlePasteImageEdit = async () => {
+                const img = await getClipboardImage();
+                if (img) {
+                    setEditImages(prev => [...prev, img]);
+                    if (!editMainImage) setEditMainImage(img);
+                }
+            };
+
+            const handleEditUrlImport = async () => {
+                if(!editUrlInput) return;
+                try {
+                    const img = await compressImage(editUrlInput);
+                    setEditImages(prev => [...prev, img]);
+                    if (!editMainImage) setEditMainImage(img);
+                    setEditUrlInput('');
+                } catch(e) {
+                     window.open(editUrlInput, '_blank');
+                }
+            };
+
+            if (isEditing) {
+                return (
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl border-2 border-blue-500 p-4 mb-3 space-y-3 relative z-20 animate-in" onClick={e => e.stopPropagation()}>
+                        <h3 className="text-sm font-bold text-blue-500 uppercase">編輯票券</h3>
+                        
+                        <div className="flex gap-2 items-end">
+                            <div className="flex-1">
+                                <label className="text-xs text-slate-400">品名</label>
+                                <input 
+                                    list={`preset-names-edit-${task.id}`}
+                                    className="w-full bg-slate-50 dark:bg-slate-700 border-b border-slate-200 dark:border-slate-600 p-1 text-lg font-bold outline-none dark:text-white" 
+                                    value={editName} 
+                                    onChange={e=>setEditName(e.target.value)}
+                                    placeholder="輸入或選擇..."
+                                />
+                                <datalist id={`preset-names-edit-${task.id}`}>
+                                    {presetNames.map(name => <option key={name} value={name} />)}
+                                </datalist>
+                            </div>
+                            <button onClick={onManagePresets} className="p-2 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded border border-purple-200 mb-1"><BookOpen size={16}/></button>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                             <div>
+                                 <label className="text-xs text-slate-400">分類</label>
+                                 <div className="flex gap-1">
+                                     <select className="flex-1 bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white" value={editTag} onChange={e=>setEditTag(e.target.value)}><option value="default">未分類</option>{tags.map(t=><option key={t} value={t}>{t}</option>)}</select>
+                                     <button onClick={onManageTags} className="bg-blue-50 hover:bg-blue-100 text-blue-600 p-2 rounded border border-blue-200" title="管理分類"><FolderPlus size={16}/></button>
+                                 </div>
+                             </div>
+                             <div>
+                                <label className="text-xs text-slate-400">有效期限</label>
+                                <input 
+                                    type="date" 
+                                    className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]" 
+                                    value={getDatePickerValue(editExpiry)} 
+                                    onChange={e=>setEditExpiry(e.target.value)}
+                                />
+                             </div>
+                        </div>
+                        
+                        <div>
+                            <label className="text-xs text-slate-400">取得日期 (新增日期)</label>
+                            <input 
+                                type="date" 
+                                className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]" 
+                                value={editCreatedAt}
+                                onChange={e=>setEditCreatedAt(e.target.value)}
+                            />
+                        </div>
+
+                        <div><label className="text-xs text-slate-400">序號</label><input className="w-full font-mono bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white" value={editSerial} onChange={e=>setEditSerial(e.target.value)}/></div>
+                        <div><label className="text-xs text-slate-400">備註</label><textarea className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 h-16 resize-none dark:text-white" value={editNote} onChange={e=>setEditNote(e.target.value)}/></div>
+                        
+                        {/* Edit Images Section */}
+                        <div className="flex flex-col gap-2 pt-2 border-t dark:border-slate-700">
+                            <label className="text-xs text-slate-400">圖片 (點擊設為封面)</label>
+                            {editImages.length > 0 && (
+                                <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+                                    {editImages.map((img, idx) => (
+                                        <div key={idx} className={`relative flex-shrink-0 w-20 h-20 rounded border-2 overflow-hidden cursor-pointer ${editMainImage === img ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200 dark:border-slate-600'}`} onClick={()=>setEditMainImage(img)}>
+                                            <img src={img} className="w-full h-full object-cover"/>
+                                            <button onClick={(e)=>{e.stopPropagation(); setEditImages(editImages.filter((_,i)=>i!==idx)); if(editMainImage===img) setEditMainImage(editImages[0]||'');}} className="absolute top-0 right-0 bg-red-500 text-white p-0.5 rounded-bl"><X size={10}/></button>
+                                            {editMainImage === img && <div className="absolute bottom-0 left-0 right-0 bg-blue-500 text-white text-[8px] text-center">封面</div>}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            
+                            <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                                <label className="flex-1 flex items-center justify-center border border-dashed border-slate-300 dark:border-slate-600 rounded p-2 text-slate-400 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors whitespace-nowrap min-w-[80px]">
+                                    <Upload size={14} className="mr-1"/> 上傳
+                                    <input type="file" hidden accept="image/*" multiple onChange={handleImageUpload}/>
+                                </label>
+                                <button onClick={handlePasteImageEdit} className="flex-1 flex items-center justify-center border border-dashed border-slate-300 dark:border-slate-600 rounded p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors whitespace-nowrap min-w-[80px]">
+                                    <ClipboardPaste size={14} className="mr-1"/> 貼上
+                                </button>
+                                <button onClick={()=>setShowGallery(true)} className="flex-1 flex items-center justify-center border border-dashed border-slate-300 dark:border-slate-600 rounded p-2 text-pink-500 hover:bg-pink-50 dark:hover:bg-slate-700 transition-colors whitespace-nowrap min-w-[80px]">
+                                    <ImagePlus size={14} className="mr-1"/> 圖庫
+                                </button>
+                            </div>
+                            
+                            <div className="flex gap-2">
+                                <input type="text" value={editUrlInput} onChange={e=>setEditUrlInput(e.target.value)} placeholder="或輸入圖片網址..." className="flex-1 px-3 py-2 text-sm border rounded-xl bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white outline-none"/>
+                                <button onClick={handleEditUrlImport} disabled={!editUrlInput} className="px-3 bg-blue-100 text-blue-600 rounded-xl disabled:opacity-50 hover:bg-blue-200 transition-colors"><Globe size={18}/></button>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end gap-2 pt-2">
+                            <button onClick={()=>setIsEditing(false)} className="px-3 py-1 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded">取消</button>
+                            <button onClick={handleSaveEdit} className="px-4 py-1 bg-blue-600 text-white rounded shadow-md hover:bg-blue-700">儲存</button>
+                        </div>
+                        {showGallery && <GalleryModal isOpen={showGallery} onClose={()=>setShowGallery(false)} images={gallery} onSelect={handleAddFromGallery} onAddImage={onAddToGallery} onDelete={(idx)=> {const newG = [...gallery]; newG.splice(idx,1); onAddToGallery(newG, true);}} />}
+                    </div>
+                );
+            }
+            
+            // Render View
+            const hasMultipleImages = task.images && task.images.length > 1;
+
+            return (
+                <div className={cardClasses} onClick={() => { if(!isSelectionMode && !isDeleted) setShowCodes(!showCodes); }}>
+                    {/* Raw Data Modal Trigger */}
+                    {showRaw && <RawDataModal content={task.originalRaw || task.text || "無原始內容"} onClose={()=>setShowRaw(false)} />}
+                    
+                    <div className="absolute top-0 right-0 z-10 flex flex-col items-end">
+                        {isDuplicate && !isDeleted && (
+                            <div className="bg-red-600 text-yellow-300 text-xs px-3 py-1 rounded-bl-lg font-black shadow-md mb-[1px] flex items-center gap-1 animate-bounce-slight border-l border-b border-white/20">
+                                <AlertOctagon size={12} strokeWidth={3}/> 重複序號
+                            </div>
+                        )}
+                        {isExpiring && !isDuplicate && <div className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-bl-lg font-bold shadow-sm">即將到期</div>}
+                    </div>
+
+                    <div className="pt-4 pb-2 px-3 relative">
+                        <div className="flex gap-3">
+                            <div className="flex flex-col items-center gap-2 flex-shrink-0">
+                                <div onClick={e=>e.stopPropagation()}>
+                                    {isSelectionMode ? (
+                                        <input type="checkbox" checked={isSelected} onChange={() => onSelect(task.id)} className="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                                    ) : (
+                                        <button onClick={() => !isDeleted && onToggle(task)} disabled={isDeleted} className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${isDeleted ? 'border-slate-300 text-slate-300' : isCompleted ? 'border-green-500 bg-green-500 text-white' : 'border-slate-300 text-transparent hover:border-blue-500 hover:text-blue-500'}`}>
+                                            <Check size={14} strokeWidth={3} />
+                                        </button>
+                                    )}
+                                </div>
+                                {task.image && (
+                                    <div 
+                                        className="w-28 h-28 rounded-lg border border-slate-200 dark:border-slate-600 overflow-hidden bg-white shadow-sm relative group cursor-pointer"
+                                        onClick={(e) => { e.stopPropagation(); onPreviewImage(task.image); }}
+                                    >
+                                        <img src={task.image} className={`w-full h-full object-cover transition-transform group-hover:scale-110 ${isDeleted && 'grayscale'}`} alt="Ticket" />
+                                        <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                            <Maximize2 size={16} className="text-white drop-shadow-md"/>
+                                        </div>
+                                        {hasMultipleImages && (
+                                            <div className="absolute bottom-0 right-0 bg-black/50 text-white text-[10px] px-1 rounded-tl">+{task.images.length-1}</div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="flex-1 min-w-0 flex flex-col justify-start">
+                                <div className="flex justify-between items-start gap-1">
+                                    <h3 
+                                        className={`font-bold text-lg leading-snug break-all cursor-pointer hover:text-blue-600 transition-colors ${isCompleted || isDeleted ? 'text-slate-400 line-through decoration-slate-300' : 'text-slate-800 dark:text-slate-100'}`}
+                                        onClick={(e) => { 
+                                            e.stopPropagation(); 
+                                            setShowRaw(true); 
+                                        }}
+                                        title="點擊查看原始資料"
+                                    >
+                                        {task.productName}
+                                    </h3>
+                                </div>
+                                
+                                <div className="flex flex-wrap items-center gap-2 mt-2">
+                                    {task.tag && task.tag !== 'default' && <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${tagColor}`}>{task.tag}</span>}
+                                    {task.serial && (
+                                        <div onClick={handleCopy} className={`flex items-center gap-1 text-sm font-mono px-2 py-0.5 rounded border transition-colors cursor-pointer active:scale-95 ${justCopied ? 'bg-green-100 text-green-700 border-green-200' : 'bg-slate-50 dark:bg-slate-700 border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-blue-400'}`}>
+                                            {task.serial} {justCopied ? <Check size={12}/> : <CopyIcon size={12} className="opacity-50"/>}
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                {task.note && <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded line-clamp-3 whitespace-pre-wrap"><StickyNote size={10} className="inline mr-1"/>{task.note}</p>}
+                                
+                                {/* New: Thumbnails for multiple images */}
+                                {hasMultipleImages && (
+                                    <div className="flex gap-1 mt-2 overflow-x-auto no-scrollbar" onClick={e=>e.stopPropagation()}>
+                                        {task.images.filter(img => img !== task.image).map((img, idx) => (
+                                            <img key={idx} src={img} className="w-8 h-8 rounded border border-slate-200 object-cover cursor-pointer hover:opacity-80" onClick={()=>onPreviewImage(img)} />
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="ticket-divider"></div>
+
+                    <div className="pb-3 px-3 relative">
+                        <div className="flex justify-between items-end">
+                            <div className="flex flex-col items-start gap-1">
+                                <div className="flex flex-col">
+                                    <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 mb-0.5 ml-0.5">有效期限</span>
+                                    {task.expiry ? (
+                                        <span className={`text-sm font-black flex items-center gap-1.5 px-2.5 py-1 rounded-lg border ${
+                                            isCompleted || isDeleted 
+                                                ? 'text-slate-400 bg-slate-100 border-slate-200 dark:bg-slate-800 dark:border-slate-700' 
+                                                : isExpiring 
+                                                    ? 'text-red-600 bg-red-50 border-red-100 dark:bg-red-900/30 dark:border-red-800' 
+                                                    : 'text-green-700 bg-green-50 border-green-100 dark:bg-green-900/30 dark:border-green-800'
+                                        }`}>
+                                            <Calendar size={14} strokeWidth={2.5}/> {task.expiry}
+                                        </span>
+                                    ) : (
+                                        <span className="text-sm font-bold text-slate-400 dark:text-slate-500 flex items-center gap-1 px-1"><Calendar size={14}/> 無期限</span>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Acquired Date Display */}
+                            <div className="flex flex-col items-end gap-0.5 mr-auto ml-2 opacity-60">
+                                <span className="text-[10px] text-slate-400">取得日期</span>
+                                <div className="flex items-center gap-1 text-[10px] font-mono text-slate-500 dark:text-slate-400">
+                                    <History size={10}/> {task.createdAt ? new Date(task.createdAt).toLocaleDateString() : '-'}
+                                </div>
+                            </div>
+
+                            <div className="flex flex-col items-end gap-1">
+                                <div className="flex gap-1 mb-0.5" onClick={e=>e.stopPropagation()}>
+                                    {isDeleted ? (
+                                        <>
+                                            <button onClick={()=>onRestore(task)} className="p-2 rounded-full hover:bg-green-50 text-green-600"><RefreshCcw size={16}/></button>
+                                            <button onClick={()=>onPermanentDelete(task.id)} className="p-2 rounded-full hover:bg-red-50 text-red-500"><Trash2 size={16}/></button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            {!isCompleted && !isSelectionMode && <button onClick={()=>{setIsEditing(true);}} className="p-2 rounded-full hover:bg-blue-50 dark:hover:bg-slate-700 text-slate-400 hover:text-blue-500"><Pencil size={16}/></button>}
+                                            {!isSelectionMode && <button onClick={()=>onDelete(task.id)} className="p-2 rounded-full hover:bg-red-50 dark:hover:bg-slate-700 text-slate-300 hover:text-red-500"><Trash size={16}/></button>}
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {isCompleted && task.completedAt && (
+                            <div className="flex justify-end mt-1">
+                                <div className="text-[10px] text-slate-400 font-mono bg-slate-50 dark:bg-slate-800/50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                    <CheckCircle2 size={10}/> {new Date(task.completedAt).toLocaleString('zh-TW', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'})}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {(isCompleted || isDeleted) && <div className="watermark-used">{isDeleted ? 'DELETED' : 'USED'}</div>}
+
+                    {showCodes && (
+                        <div className="border-t border-slate-100 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-800/50 animate-in cursor-default text-center relative z-20" onClick={e=>e.stopPropagation()}>
+                            <div className="absolute top-2 right-2"><button onClick={()=>setShowCodes(false)} className="p-1 bg-slate-200 dark:bg-slate-700 rounded-full text-slate-500"><X size={16}/></button></div>
+                            <h4 className="font-bold text-slate-700 dark:text-slate-200 mb-4">{task.productName}</h4>
+                            
+                            {task.isTicket && (
+                                <div className="space-y-4 flex flex-col items-center">
+                                    <div className="bg-white p-2 rounded-lg"><BarcodeCanvas text={task.serial} /></div>
+                                    <div className="bg-white p-2 rounded-lg"><QRCodeCanvas text={task.serial} /></div>
+                                    <div className="text-2xl font-mono font-bold tracking-widest text-slate-800 dark:text-white select-all">{task.serial}</div>
+                                </div>
+                            )}
+                            
+                            {task.note && <div className="mt-4 bg-amber-50 dark:bg-amber-900/20 p-3 rounded-lg text-sm text-left text-slate-600 dark:text-slate-300 border border-amber-100 dark:border-amber-800/30 whitespace-pre-wrap">{task.note}</div>}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const Dashboard = ({ tasks, expiryThreshold }) => {
+            const [isOpen, setIsOpen] = useState(true);
+            const activeTasks = tasks.filter(t => !t.completed && !t.isDeleted);
+            const expiringCount = activeTasks.filter(t => t.expiry && checkIsExpiringSoon(t.expiry, expiryThreshold)).length;
+            const completedCount = tasks.filter(t => t.completed && !t.isDeleted).length;
+
+            if(!activeTasks.length && !completedCount) return null;
+
+            return (
+                <div className="mb-4 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl p-4 text-white shadow-lg relative overflow-hidden">
+                    <div className="absolute right-0 top-0 opacity-10 transform translate-x-4 -translate-y-4"><LayoutDashboard size={100} /></div>
+                    <div className="flex justify-between items-start relative z-10">
+                        <div>
+                            <h2 className="text-sm font-medium opacity-90 flex items-center gap-1">票券概況 {isOpen ? <ChevronUp size={14} onClick={()=>setIsOpen(false)} className="cursor-pointer"/> : <ChevronDown size={14} onClick={()=>setIsOpen(true)} className="cursor-pointer"/>}</h2>
+                            <div className="text-3xl font-bold mt-1">{activeTasks.length} <span className="text-xs font-normal opacity-70">張待使用</span></div>
+                        </div>
+                        {expiringCount > 0 && (
+                            <div className="bg-white/20 backdrop-blur-sm px-3 py-1.5 rounded-lg flex items-center gap-2 animate-pulse">
+                                <AlertTriangle size={16} className="text-yellow-300"/>
+                                <span className="font-bold text-sm">{expiringCount} 張快過期</span>
+                            </div>
+                        )}
+                    </div>
+                    
+                    {isOpen && (
+                        <div className="grid grid-cols-3 gap-2 mt-4 relative z-10 border-t border-white/20 pt-3">
+                            <div className="text-center"><div className="text-xs opacity-70">今日新增</div><div className="font-bold">{tasks.filter(t=> { const d = t.createdAt ? new Date(t.createdAt) : new Date(); return d.toDateString() === new Date().toDateString() }).length}</div></div>
+                            <div className="text-center"><div className="text-xs opacity-70">已完成</div><div className="font-bold">{completedCount}</div></div>
+                            <div className="text-center"><div className="text-xs opacity-70">垃圾桶</div><div className="font-bold">{tasks.filter(t=>t.isDeleted).length}</div></div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const BottomNav = ({ view, setView, counts }) => (
+            <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 pb-safe pt-2 px-6 flex justify-between items-end z-40 h-[60px] pb-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+                <button onClick={() => setView('active')} className={`flex flex-col items-center gap-1 w-16 transition-colors ${view === 'active' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`}>
+                    <ListTodo size={24} strokeWidth={view === 'active' ? 2.5 : 2} />
+                    <span className="text-[10px] font-medium">待辦</span>
+                    {counts.active > 0 && <span className="absolute top-2 ml-6 bg-blue-500 text-white text-[10px] px-1.5 rounded-full min-w-[16px] text-center">{counts.active}</span>}
+                </button>
+                <button onClick={() => setView('completed')} className={`flex flex-col items-center gap-1 w-16 transition-colors ${view === 'completed' ? 'text-green-600 dark:text-green-400' : 'text-slate-400'}`}>
+                    <CheckCircle2 size={24} strokeWidth={view === 'completed' ? 2.5 : 2} />
+                    <span className="text-[10px] font-medium">完成</span>
+                </button>
+                <button onClick={() => setView('deleted')} className={`flex flex-col items-center gap-1 w-16 transition-colors ${view === 'deleted' ? 'text-red-500' : 'text-slate-400'}`}>
+                    <Trash size={24} strokeWidth={view === 'deleted' ? 2.5 : 2} />
+                    <span className="text-[10px] font-medium">回收</span>
+                </button>
+            </div>
+        );
+
+        const AddTaskModal = ({ isOpen, onClose, onAdd, tags, onManageTags, gallery, onAddToGallery, presetNames, onManagePresets }) => {
+            const [mode, setMode] = useState('paste');
+            const [pasteVal, setPasteVal] = useState('');
+            const [manualName, setManualName] = useState('');
+            const [manualSerial, setManualSerial] = useState('');
+            const [manualExpiry, setManualExpiry] = useState('');
+            const [manualCreatedAt, setManualCreatedAt] = useState(''); // New: Created At
+            const [manualNote, setManualNote] = useState('');
+            const [manualUrl, setManualUrl] = useState('');
+            const [manualTag, setManualTag] = useState('default');
+            
+            // Multiple Images State
+            const [pendingImages, setPendingImages] = useState([]);
+            const [pendingMainImage, setPendingMainImage] = useState('');
+
+            const [urlInput, setUrlInput] = useState('');
+            const [showGallery, setShowGallery] = useState(false);
+            const fileInputRef = useRef(null);
+
+            useEffect(() => {
+                if(isOpen) {
+                    setPasteVal(''); setManualName(''); setManualSerial(''); 
+                    setManualExpiry(''); setManualNote(''); setManualUrl(''); 
+                    setManualTag('default'); 
+                    setPendingImages([]); setPendingMainImage('');
+                    setMode('paste');
+                    setUrlInput(''); 
+                    // Default creation date is today
+                    const today = new Date().toISOString().split('T')[0];
+                    setManualCreatedAt(today);
+                }
+            }, [isOpen]);
+
+            const handleUrlImport = async () => {
+                if(!urlInput) return;
+                try {
+                    const img = await compressImage(urlInput);
+                    addPendingImage(img);
+                    setUrlInput('');
+                } catch(e) {
+                     window.open(urlInput, '_blank');
+                }
+            };
+            
+            const addPendingImage = (img) => {
+                setPendingImages(prev => [...prev, img]);
+                // If it's the first image, set as main automatically
+                if (!pendingMainImage) {
+                    setPendingMainImage(img);
+                }
+            };
+            
+            const removePendingImage = (indexToRemove) => {
+                const imgToRemove = pendingImages[indexToRemove];
+                const newImages = pendingImages.filter((_, i) => i !== indexToRemove);
+                setPendingImages(newImages);
+                if (pendingMainImage === imgToRemove) {
+                    setPendingMainImage(newImages[0] || '');
+                }
+            };
+
+            const toggleSaveToGallery = (img) => {
+                onAddToGallery(img);
+                alert("已加入圖庫！");
+            };
+
+            const handleSubmit = () => {
+                const formattedExpiry = manualExpiry.replace(/-/g, '/');
+                onAdd({ 
+                    mode, 
+                    pasteVal, 
+                    manualName, 
+                    manualSerial, 
+                    manualExpiry: formattedExpiry, 
+                    manualNote, 
+                    manualUrl, 
+                    manualTag, 
+                    pendingImages, 
+                    pendingMainImage,
+                    manualCreatedAt 
+                });
+                onClose();
+            };
+
+            const handleAnalyzeToManual = () => {
+                const parsed = parseTicketInfo(pasteVal);
+                setManualName(parsed.productName || '');
+                setManualSerial(parsed.serial || '');
+                const dateStr = parsed.expiry ? parsed.expiry.replace(/\//g, '-').replace(/\./g, '-') : '';
+                setManualExpiry(dateStr);
+                setMode('manual');
+            };
+
+            const handleImage = async (e) => {
+                const files = Array.from(e.target.files);
+                if(files.length > 0) {
+                    for (const file of files) {
+                        try {
+                            const compressed = await compressImage(file);
+                            addPendingImage(compressed);
+                        } catch(err) { console.error(err); }
+                    }
+                }
+            };
+
+            const handlePasteBtn = async () => {
+                const img = await getClipboardImage();
+                if (img) addPendingImage(img);
+            };
+
+            const handlePaste = async (e) => {
+                const text = e.clipboardData.getData('text/plain');
+                const items = e.clipboardData.items;
+                let imageBlob = null;
+                for (let i = 0; i < items.length; i++) {
+                    const item = items[i];
+                    if (item.type.indexOf('image') !== -1 || (item.kind === 'file' && item.type.includes('image'))) {
+                        imageBlob = item.getAsFile();
+                        if (imageBlob) break; 
+                    }
+                }
+                if (imageBlob) {
+                    e.preventDefault(); 
+                    try {
+                        const compressed = await compressImage(imageBlob);
+                        addPendingImage(compressed);
+                    } catch (err) {
+                        console.error("Paste image error", err);
+                    }
+                    if (text) {
+                        setPasteVal(prev => prev + (prev ? '\n' : '') + text);
+                    }
+                } 
+            };
+
+            if(!isOpen) return null;
+
+            return (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center animate-in" onClick={onClose}>
+                    <div className="bg-white dark:bg-slate-800 w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl p-5 max-h-[90vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-bold dark:text-white">新增票券</h2>
+                            <button onClick={onClose} className="bg-slate-100 dark:bg-slate-700 p-1 rounded-full text-slate-500"><X size={20}/></button>
+                        </div>
+
+                        <div className="flex bg-slate-100 dark:bg-slate-700 p-1 rounded-xl mb-4">
+                            <button onClick={()=>setMode('paste')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'paste' ? 'bg-white dark:bg-slate-600 shadow text-blue-600 dark:text-blue-300' : 'text-slate-500'}`}>智慧貼上</button>
+                            <button onClick={()=>setMode('manual')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'manual' ? 'bg-white dark:bg-slate-600 shadow text-blue-600 dark:text-blue-300' : 'text-slate-500'}`}>手動輸入</button>
+                        </div>
+
+                        {mode === 'paste' ? (
+                            <div className="space-y-3">
+                                <div className="relative">
+                                    <textarea 
+                                        value={pasteVal} 
+                                        onChange={e=>setPasteVal(e.target.value)} 
+                                        onPaste={handlePaste} 
+                                        placeholder="在此貼上簡訊文字、票券內容、或直接貼上圖片..." 
+                                        className="w-full h-64 p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none resize-none dark:text-white focus:ring-2 focus:ring-blue-500 transition-all" 
+                                        autoFocus 
+                                    />
+                                    <div className="absolute bottom-3 right-3 pointer-events-none">
+                                        <div className="bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400 text-[10px] px-2 py-1 rounded-md opacity-70">
+                                            支援 Ctrl+V 貼上圖片
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <button 
+                                    onClick={handleAnalyzeToManual} 
+                                    disabled={!pasteVal.trim()}
+                                    className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-purple-200 dark:shadow-none flex items-center justify-center gap-2 mb-2"
+                                >
+                                    <Wand2 size={16}/> 解析並帶入編輯
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="space-y-3">
+                                <div className="flex gap-2 items-end">
+                                    <div className="flex-1">
+                                        <input 
+                                            list="preset-names"
+                                            value={manualName} 
+                                            onChange={e=>setManualName(e.target.value)} 
+                                            placeholder="品名 (必填，可選或輸入)" 
+                                            className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none font-bold dark:text-white"
+                                        />
+                                        <datalist id="preset-names">
+                                            {presetNames.map(name => <option key={name} value={name} />)}
+                                        </datalist>
+                                    </div>
+                                    <button onClick={onManagePresets} className="p-3 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded-xl border border-purple-200"><BookOpen size={18}/></button>
+                                </div>
+
+                                <div className="flex gap-2">
+                                    <select value={manualTag} onChange={e=>setManualTag(e.target.value)} className="flex-1 p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm dark:text-white">
+                                        <option value="default">未分類</option>
+                                        {tags.map(t=><option key={t} value={t}>{t}</option>)}
+                                    </select>
+                                    <button onClick={onManageTags} className="px-3 bg-slate-100 dark:bg-slate-700 rounded-xl text-blue-500"><FolderPlus size={18}/></button>
+                                </div>
+                                <div className="flex gap-2">
+                                    <div className="flex-1">
+                                        <label className="text-[10px] text-slate-400 ml-1">有效期限</label>
+                                        <input type="date" value={manualExpiry} onChange={e=>setManualExpiry(e.target.value)} className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm dark:text-white dark:[color-scheme:dark]"/>
+                                    </div>
+                                    <div className="flex-1">
+                                        <label className="text-[10px] text-slate-400 ml-1">取得日期 (新增日期)</label>
+                                        <input type="date" value={manualCreatedAt} onChange={e=>setManualCreatedAt(e.target.value)} className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm dark:text-white dark:[color-scheme:dark]"/>
+                                    </div>
+                                </div>
+                                <input value={manualSerial} onChange={e=>setManualSerial(e.target.value)} placeholder="序號" className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm font-mono dark:text-white"/>
+                                <textarea value={manualNote} onChange={e=>setManualNote(e.target.value)} placeholder="備註..." className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm h-20 resize-none dark:text-white"/>
+                            </div>
+                        )}
+
+                        {/* Image Section */}
+                        <div className="mt-4 pt-3 border-t dark:border-slate-700">
+                             <div className="flex gap-2 justify-center mb-2 overflow-x-auto no-scrollbar">
+                                <button onClick={()=>fileInputRef.current.click()} className="flex items-center gap-1 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-slate-600 dark:text-slate-300 text-sm font-medium hover:bg-slate-200 whitespace-nowrap"><ImageIcon size={16}/> 上傳</button>
+                                <button onClick={handlePasteBtn} className="flex items-center gap-1 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-blue-600 dark:text-blue-300 text-sm font-medium hover:bg-slate-200 whitespace-nowrap"><ClipboardPaste size={16}/> 貼上</button>
+                                <button onClick={()=>setShowGallery(true)} className="flex items-center gap-1 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-pink-500 text-sm font-medium hover:bg-slate-200 whitespace-nowrap"><ImagePlus size={16}/> 圖庫</button>
+                            </div>
+                            
+                            {/* URL Import */}
+                            <div className="flex gap-2 mb-2">
+                                <input type="text" value={urlInput} onChange={e=>setUrlInput(e.target.value)} placeholder="或輸入圖片網址..." className="flex-1 px-3 py-2 text-sm border rounded-xl bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white outline-none"/>
+                                <button onClick={handleUrlImport} disabled={!urlInput} className="px-3 bg-blue-100 text-blue-600 rounded-xl disabled:opacity-50 hover:bg-blue-200 transition-colors"><Globe size={18}/></button>
+                            </div>
+
+                            {/* Images Grid */}
+                            {pendingImages.length > 0 && (
+                                <div className="mt-2 grid grid-cols-3 gap-2 animate-in w-full">
+                                    {pendingImages.map((img, idx) => (
+                                        <div key={idx} className={`relative border-2 rounded-lg overflow-hidden group h-24 cursor-pointer ${pendingMainImage === img ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200 dark:border-slate-700'}`} onClick={()=>setPendingMainImage(img)}>
+                                            <img src={img} className="w-full h-full object-cover bg-slate-100 dark:bg-black/20"/>
+                                            <button onClick={(e)=>{e.stopPropagation(); toggleSaveToGallery(img);}} className="absolute bottom-1 right-1 p-1.5 rounded-full shadow-md backdrop-blur-sm bg-white/80 text-pink-500 hover:scale-110 transition-transform z-10">
+                                                <Heart size={12} fill="currentColor"/>
+                                            </button>
+                                            <button onClick={(e)=>{e.stopPropagation(); removePendingImage(idx);}} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-1 shadow-md hover:bg-red-600 transition-colors z-20">
+                                                <X size={10}/>
+                                            </button>
+                                            {pendingMainImage === img && <div className="absolute top-1 left-1 bg-blue-500 text-white text-[8px] px-1 rounded shadow">封面</div>}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                        
+                        <input type="file" ref={fileInputRef} hidden accept="image/*" multiple onChange={handleImage} />
+
+                        <button onClick={handleSubmit} disabled={mode==='paste' ? (!pasteVal && pendingImages.length===0) : !manualName} className="w-full mt-6 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-200 dark:shadow-none flex items-center justify-center gap-2">
+                            <Plus size={20}/> 建立票券
+                        </button>
+
+                        {showGallery && <GalleryModal isOpen={showGallery} onClose={()=>setShowGallery(false)} images={gallery} onSelect={(img)=>{addPendingImage(img);}} onAddImage={onAddToGallery} onDelete={(idx)=> {const newG = [...gallery]; newG.splice(idx,1); onAddToGallery(newG, true);}} />}
+                    </div>
+                </div>
+            );
+        };
+
+        const SettingsModal = ({ isOpen, onClose, tgToken, setTgToken, tgChatId, setTgChatId, notifyDays, setNotifyDays, onSave }) => {
+            const [localToken, setLocalToken] = useState(tgToken);
+            const [localChatId, setLocalChatId] = useState(tgChatId);
+            const [localDays, setLocalDays] = useState(notifyDays);
+
+            useEffect(() => {
+                if (isOpen) {
+                    setLocalToken(tgToken);
+                    setLocalChatId(tgChatId);
+                    setLocalDays(notifyDays);
+                }
+            }, [isOpen, tgToken, tgChatId, notifyDays]);
+
+            const handleSave = () => {
+                onSave({ tgToken: localToken, tgChatId: localChatId, notifyDays: localDays });
+                onClose();
+            };
+
+            if (!isOpen) return null;
+            return (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in">
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-sm w-full p-6 border border-slate-100 dark:border-slate-700">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-lg font-bold dark:text-white flex items-center gap-2">
+                                <BellRing size={20} className="text-blue-500"/> 通知設定
+                            </h2>
+                            <div className="text-[10px] bg-emerald-100 text-emerald-600 px-2 py-1 rounded-full flex items-center gap-1 font-bold">
+                                <WifiOff size={12}/> Offline Local
+                            </div>
+                        </div>
+                        
+                        <div className="space-y-3">
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 dark:text-slate-400 block mb-1">快到期通知天數 (N天)</label>
+                                <div className="flex items-center gap-2">
+                                    <input 
+                                        type="number" 
+                                        min="1"
+                                        max="365"
+                                        value={localDays} 
+                                        onChange={e=>setLocalDays(parseInt(e.target.value) || 7)} 
+                                        className="w-20 p-2 text-sm text-center font-bold border rounded-lg bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                    <span className="text-sm text-slate-600 dark:text-slate-300">天內通知</span>
+                                </div>
+                            </div>
+
+                            <div className="border-t dark:border-slate-700 my-2 pt-2">
+                                <label className="text-xs font-bold text-slate-500 dark:text-slate-400 block mb-1">Telegram Bot Token</label>
+                                <input 
+                                    type="text" 
+                                    value={localToken} 
+                                    onChange={e=>setLocalToken(e.target.value)} 
+                                    placeholder="123456:ABC-DEF..." 
+                                    className="w-full p-2 text-sm border rounded-lg bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                            </div>
+                            
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 dark:text-slate-400 block mb-1">Chat ID</label>
+                                <input 
+                                    type="text" 
+                                    value={localChatId} 
+                                    onChange={e=>setLocalChatId(e.target.value)} 
+                                    placeholder="12345678" 
+                                    className="w-full p-2 text-sm border rounded-lg bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="mt-6 flex justify-end gap-2">
+                            <button onClick={onClose} className="px-4 py-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-sm font-bold">取消</button>
+                            <button onClick={handleSave} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-blue-700">
+                                儲存設定
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const DataToolsModal = ({ isOpen, onClose, tasks, onRestore }) => {
+            const [activeTab, setActiveTab] = useState('backup');
+            const [restoreInput, setRestoreInput] = useState('');
+            const [restoreStatus, setRestoreStatus] = useState('');
+            const [pendingImport, setPendingImport] = useState(null); 
+            const fileInputRef = useRef(null);
+
+            useEffect(() => {
+                if (isOpen) {
+                    setRestoreStatus('');
+                    setPendingImport(null);
+                    setRestoreInput('');
+                }
+            }, [isOpen]);
+
+            if (!isOpen) return null;
+
+            const handleBackupCopy = async () => {
+                const dataStr = JSON.stringify(tasks);
+                const success = await copyToClipboard(dataStr);
+                if (success) { alert(`✅ 已複製 ${tasks.length} 筆資料 (含圖片) 到剪貼簿！`); } 
+                else { alert("❌ 複製失敗。請嘗試手動選取文字或改用「下載檔案」功能。"); }
+            };
+
+            const handleDownload = () => {
+                const dataStr = JSON.stringify(tasks, null, 2);
+                const blob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = `ticket_offline_backup_${new Date().toISOString().split('T')[0]}.json`;
+                a.click(); URL.revokeObjectURL(url);
+            };
+
+            const processImportData = (data) => {
+                if (!Array.isArray(data)) {
+                    setRestoreStatus('❌ 格式錯誤：匯入的資料必須是陣列 (Array)');
+                    return;
+                }
+                setPendingImport(data); 
+                setRestoreStatus('');
+            };
+
+            const handleTextRestore = () => {
+                try {
+                    setRestoreStatus('解析中...');
+                    const data = JSON.parse(restoreInput);
+                    processImportData(data);
+                } catch (e) { 
+                    setRestoreStatus('❌ 格式錯誤，請確認文字為有效的 JSON'); 
+                    console.error(e); 
+                }
+            };
+
+            const handleFileRestore = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        processImportData(data);
+                    } catch (err) {
+                        setRestoreStatus('❌ 檔案讀取失敗：格式錯誤或非 JSON 檔');
+                        console.error(err);
+                    }
+                };
+                reader.onerror = () => { setRestoreStatus('❌ 檔案讀取錯誤'); };
+                reader.readAsText(file);
+            };
+
+            const executeRestore = async (mode) => {
+                if (!pendingImport) return;
+                
+                if (mode === 'overwrite') {
+                    if (!confirm(`⚠️ 嚴重警告 ⚠️\n\n此動作將會「刪除」您目前所有的資料，並完全替換成匯入的內容。\n\n確定要繼續嗎？`)) {
+                        return;
+                    }
+                }
+
+                setRestoreStatus('處理中...');
+                await onRestore(pendingImport, mode);
+                setRestoreStatus('✅ 匯入完成！');
+                setPendingImport(null);
+                setRestoreInput('');
+                if(fileInputRef.current) fileInputRef.current.value = '';
+                setTimeout(onClose, 1000);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in">
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-lg w-full p-0 overflow-hidden flex flex-col max-h-[90vh] border border-slate-100 dark:border-slate-700">
+                        <div className="p-4 border-b dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800">
+                            <h2 className="font-bold text-lg flex items-center gap-2 text-slate-700 dark:text-white"><Database size={20}/> 資料備份與還原</h2>
+                            <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button>
+                        </div>
+                        
+                        <div className="flex border-b dark:border-slate-700">
+                            <button onClick={() => setActiveTab('backup')} className={`flex-1 py-3 text-sm font-bold text-center transition-colors ${activeTab === 'backup' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50 dark:bg-blue-900/20' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>匯出 (備份)</button>
+                            <button onClick={() => setActiveTab('restore')} className={`flex-1 py-3 text-sm font-bold text-center transition-colors ${activeTab === 'restore' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50 dark:bg-blue-900/20' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>匯入 (還原)</button>
+                        </div>
+
+                        <div className="p-6 overflow-y-auto">
+                            {activeTab === 'backup' ? (
+                                <div className="space-y-4">
+                                    <div className="bg-blue-50 dark:bg-blue-900/30 p-4 rounded-xl border border-blue-100 dark:border-blue-800 text-center">
+                                        <div className="text-3xl font-black text-blue-600 dark:text-blue-400 mb-1">{tasks.length}</div>
+                                        <div className="text-xs text-blue-400 font-bold uppercase tracking-wider">目前總項目數</div>
+                                    </div>
+                                    <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">備份包含所有的票券資訊、備註、圖片與標籤。<br/>建議定期備份，避免清除瀏覽器快取時遺失資料。</p>
+                                    <div className="grid grid-cols-2 gap-3 mt-4">
+                                        <button onClick={handleBackupCopy} className="flex flex-col items-center justify-center gap-2 p-4 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-blue-300 transition-all group">
+                                            <div className="bg-slate-100 dark:bg-slate-600 p-3 rounded-full group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors"><Copy size={24} className="dark:text-white"/></div>
+                                            <span className="text-sm font-bold text-slate-600 dark:text-slate-300">複製到剪貼簿</span>
+                                        </button>
+                                        <button onClick={handleDownload} className="flex flex-col items-center justify-center gap-2 p-4 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-blue-300 transition-all group">
+                                            <div className="bg-slate-100 dark:bg-slate-600 p-3 rounded-full group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors"><Download size={24} className="dark:text-white"/></div>
+                                            <span className="text-sm font-bold text-slate-600 dark:text-slate-300">下載成檔案</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    {pendingImport ? (
+                                        <div className="animate-in">
+                                            <div className="bg-emerald-50 dark:bg-emerald-900/20 p-4 rounded-xl border border-emerald-100 dark:border-emerald-800 text-center mb-4">
+                                                <CheckCircle2 size={32} className="mx-auto text-emerald-500 mb-2"/>
+                                                <div className="text-emerald-700 dark:text-emerald-400 font-bold">成功讀取 {pendingImport.length} 筆資料</div>
+                                            </div>
+                                            <p className="text-sm text-slate-600 dark:text-slate-300 mb-4 text-center font-bold">請問您要如何匯入這些資料？</p>
+                                            
+                                            <div className="grid grid-cols-1 gap-3">
+                                                <button onClick={() => executeRestore('append')} className="flex items-center gap-3 p-4 border border-blue-200 dark:border-slate-600 bg-blue-50 dark:bg-slate-700 rounded-xl hover:bg-blue-100 dark:hover:bg-slate-600 transition-colors text-left group">
+                                                    <div className="bg-blue-200 dark:bg-slate-500 p-2 rounded-full text-blue-700 dark:text-white"><FilePlus2 size={20}/></div>
+                                                    <div>
+                                                        <div className="font-bold text-slate-800 dark:text-white">附加 (Append)</div>
+                                                        <div className="text-xs text-slate-500 dark:text-slate-300">保留現有資料，將新資料加入清單後方</div>
+                                                    </div>
+                                                </button>
+                                                
+                                                <button onClick={() => executeRestore('overwrite')} className="flex items-center gap-3 p-4 border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 rounded-xl hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors text-left group">
+                                                    <div className="bg-red-200 dark:bg-red-800 p-2 rounded-full text-red-700 dark:text-white"><RefreshCw size={20}/></div>
+                                                    <div>
+                                                        <div className="font-bold text-red-700 dark:text-red-300">覆蓋 (Overwrite)</div>
+                                                        <div className="text-xs text-red-500 dark:text-red-400">⚠️ 刪除所有現有資料，完全替換為新資料</div>
+                                                    </div>
+                                                </button>
+                                            </div>
+                                            <button onClick={() => setPendingImport(null)} className="w-full mt-4 py-2 text-slate-400 hover:text-slate-600 text-sm">取消</button>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            {/* File Import Section */}
+                                            <div 
+                                                onClick={() => fileInputRef.current.click()}
+                                                className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-6 text-center cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors group"
+                                            >
+                                                <input 
+                                                    type="file" 
+                                                    ref={fileInputRef} 
+                                                    onChange={handleFileRestore} 
+                                                    accept=".json" 
+                                                    hidden 
+                                                />
+                                                <div className="flex flex-col items-center gap-2">
+                                                    <div className="bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 p-3 rounded-full group-hover:scale-110 transition-transform">
+                                                        <FileJson size={24}/>
+                                                    </div>
+                                                    <span className="font-bold text-slate-700 dark:text-slate-200">上傳 JSON 備份檔案</span>
+                                                    <span className="text-xs text-slate-400">點擊此處選取檔案，直接還原資料</span>
+                                                </div>
+                                            </div>
+
+                                            <div className="relative flex py-1 items-center">
+                                                <div className="flex-grow border-t border-slate-200 dark:border-slate-700"></div>
+                                                <span className="flex-shrink-0 mx-4 text-xs text-slate-400">或是貼上文字</span>
+                                                <div className="flex-grow border-t border-slate-200 dark:border-slate-700"></div>
+                                            </div>
+
+                                            <textarea value={restoreInput} onChange={(e) => setRestoreInput(e.target.value)} placeholder="請在此貼上備份的文字內容 (JSON)..." className="w-full h-24 p-3 border rounded-xl text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none resize-none bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white"></textarea>
+                                            
+                                            {restoreStatus && <div className={`text-sm font-bold text-center ${restoreStatus.includes('❌') ? 'text-red-500' : 'text-blue-600'}`}>{restoreStatus}</div>}
+                                            
+                                            <button onClick={handleTextRestore} disabled={!restoreInput.trim()} className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2"><FileJson size={18}/> 解析文字</button>
+                                        </>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const LoginScreen = ({ onJoin }) => {
+            const [code, setCode] = useState('');
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-slate-100 dark:bg-slate-900 px-4 transition-colors">
+                    <div className="max-w-md w-full bg-white dark:bg-slate-800 rounded-3xl shadow-2xl p-8 border border-slate-100 dark:border-slate-700">
+                        <div className="text-center mb-8">
+                            <div className="bg-emerald-600 w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 transform rotate-3 shadow-lg shadow-emerald-600/30"><WifiOff className="text-white w-10 h-10" /></div>
+                            <h1 className="text-3xl font-extrabold text-slate-800 dark:text-white mb-2">離線票券管家</h1>
+                            <p className="text-slate-500 dark:text-slate-400">本機儲存 · 無需網路 · 隱私安全</p>
+                        </div>
+                        <form onSubmit={(e) => {e.preventDefault(); if(code.trim()) onJoin(code.trim());}} className="space-y-5">
+                            <div>
+                                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 ml-1">建立/開啟清單 (Workspace)</label>
+                                <div className="relative"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><FolderInput className="h-5 w-5 text-gray-400" /></div><input type="text" required placeholder="請輸入自訂名稱 (如: my-tickets)" className="w-full pl-10 pr-4 py-3.5 bg-slate-50 dark:bg-slate-700 rounded-xl border border-slate-200 dark:border-slate-600 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all outline-none font-medium text-slate-800 dark:text-white" value={code} onChange={(e) => setCode(e.target.value)} /></div>
+                            </div>
+                            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2">進入清單 <ArrowRightLeft size={18} /></button>
+                        </form>
+                        <p className="text-center text-xs text-slate-400 mt-6">所有資料僅儲存於此瀏覽器中，清除快取可能會遺失資料。</p>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [workspaceId, setWorkspaceId] = useState(() => localStorage.getItem('ticket_offline_workspace_id') || '');
+            const [isJoined, setIsJoined] = useState(false);
+            const [tasks, setTasks] = useState([]);
+            const [tags, setTags] = useState([]); 
+            const [gallery, setGallery] = useState([]); 
+            const [presetNames, setPresetNames] = useState([]); 
+            const [loading, setLoading] = useState(false);
+            
+            // Notification Settings (Synced to LocalStorage)
+            const [tgToken, setTgToken] = useState('');
+            const [tgChatId, setTgChatId] = useState('');
+            const [notifyDays, setNotifyDays] = useState(7);
+            const [showSettings, setShowSettings] = useState(false);
+
+            // UI States
+            const [viewStatus, setViewStatus] = useState('active'); 
+            const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('pref_theme') === 'dark');
+            const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+            const [searchQuery, setSearchQuery] = useState('');
+            const [currentTagFilter, setCurrentTagFilter] = useState('all');
+            const [expiryThreshold, setExpiryThreshold] = useState(() => parseInt(localStorage.getItem('pref_expiryThreshold') || '30'));
+            const [sortType, setSortType] = useState('expiring');
+            const [previewImage, setPreviewImage] = useState(null);
+            
+            // Modals & Selection
+            const [isSelectionMode, setIsSelectionMode] = useState(false);
+            const [selectedTasks, setSelectedTasks] = useState(new Set());
+            const [showTagManager, setShowTagManager] = useState(false);
+            const [showPresetManager, setShowPresetManager] = useState(false); 
+            const [showDataTools, setShowDataTools] = useState(false);
+            
+            // Menu Ref
+            const menuRef = useRef(null);
+            const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+            // Effects
+            useEffect(() => {
+                if (isDarkMode) document.documentElement.classList.add('dark');
+                else document.documentElement.classList.remove('dark');
+                localStorage.setItem('pref_theme', isDarkMode ? 'dark' : 'light');
+            }, [isDarkMode]);
+
+            // OFFLINE: Load/Save Data
+            const TASKS_KEY = `offline_tasks_${workspaceId}`;
+            const TAGS_KEY = `offline_tags_${workspaceId}`;
+            const GALLERY_KEY = `offline_gallery_${workspaceId}`; 
+            const PRESET_NAMES_KEY = `offline_preset_names_${workspaceId}`; 
+            const SETTINGS_KEY = `offline_settings_${workspaceId}`;
+
+            // 1. Initial Load
+            useEffect(() => {
+                if (workspaceId) {
+                    setIsJoined(true);
+                    setLoading(true);
+                    const storedTasks = localStorage.getItem(TASKS_KEY);
+                    const storedTags = localStorage.getItem(TAGS_KEY);
+                    const storedGallery = localStorage.getItem(GALLERY_KEY);
+                    const storedPresets = localStorage.getItem(PRESET_NAMES_KEY);
+                    const storedSettings = localStorage.getItem(SETTINGS_KEY);
+
+                    if (storedTasks) setTasks(JSON.parse(storedTasks));
+                    if (storedTags) setTags(JSON.parse(storedTags));
+                    if (storedGallery) setGallery(JSON.parse(storedGallery));
+                    if (storedPresets) setPresetNames(JSON.parse(storedPresets));
+                    if (storedSettings) {
+                        const parsed = JSON.parse(storedSettings);
+                        setTgToken(parsed.tgToken || '');
+                        setTgChatId(parsed.tgChatId || '');
+                        setNotifyDays(parsed.notifyDays || 7);
+                    }
+                    setLoading(false);
+                }
+            }, [workspaceId]);
+
+            // 2. Persist Tasks on change
+            useEffect(() => {
+                if(isJoined && workspaceId) {
+                    localStorage.setItem(TASKS_KEY, JSON.stringify(tasks));
+                }
+            }, [tasks, workspaceId, isJoined]);
+
+            // 3. Persist Tags on change
+            useEffect(() => {
+                if(isJoined && workspaceId) {
+                    localStorage.setItem(TAGS_KEY, JSON.stringify(tags));
+                }
+            }, [tags, workspaceId, isJoined]);
+
+            // 4. Persist Gallery on change 
+            useEffect(() => {
+                if(isJoined && workspaceId) {
+                    localStorage.setItem(GALLERY_KEY, JSON.stringify(gallery));
+                }
+            }, [gallery, workspaceId, isJoined]);
+
+            // 5. Persist Preset Names on change
+            useEffect(() => {
+                if(isJoined && workspaceId) {
+                    localStorage.setItem(PRESET_NAMES_KEY, JSON.stringify(presetNames));
+                }
+            }, [presetNames, workspaceId, isJoined]);
+
+            // Menu Click Outside Listener
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (menuRef.current && !menuRef.current.contains(event.target)) {
+                        setIsMenuOpen(false);
+                    }
+                };
+                document.addEventListener("mousedown", handleClickOutside);
+                return () => document.removeEventListener("mousedown", handleClickOutside);
+            }, []);
+            
+            const handleSaveSettings = (newSettings) => {
+                setTgToken(newSettings.tgToken);
+                setTgChatId(newSettings.tgChatId);
+                setNotifyDays(newSettings.notifyDays);
+                if(isJoined && workspaceId) {
+                    localStorage.setItem(SETTINGS_KEY, JSON.stringify(newSettings));
+                }
+            };
+            
+            // Daily Notification Check
+            useEffect(() => {
+                if (isJoined && tasks.length > 0 && tgToken && tgChatId) {
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    const lastCheckKey = `last_expiry_notify_date_${workspaceId}`; 
+                    const lastCheck = localStorage.getItem(lastCheckKey);
+                    
+                    if (lastCheck !== todayStr) {
+                        const expiringTasks = tasks.filter(t => !t.completed && !t.isDeleted && t.expiry && checkIsExpiringSoon(t.expiry, notifyDays));
+                        
+                        if (expiringTasks.length > 0) {
+                            let msg = `⚠️ *每日到期提醒 (${expiringTasks.length}筆)* \n`;
+                            msg += `設定天數: ${notifyDays} 天內 \n\n`;
+                            
+                            expiringTasks.slice(0, 10).forEach(t => {
+                                const days = getDaysRemaining(t.expiry);
+                                msg += `🔸 ${t.productName} (剩 ${days} 天) \n`;
+                            });
+                            
+                            if (expiringTasks.length > 10) msg += `...還有 ${expiringTasks.length - 10} 筆`;
+
+                            sendTelegramMessage(tgToken, tgChatId, msg);
+                        }
+                        localStorage.setItem(lastCheckKey, todayStr);
+                    }
+                }
+            }, [isJoined, tasks, tgToken, tgChatId, notifyDays, workspaceId]);
+
+
+            // Filter Logic
+            const duplicateSerials = useMemo(() => {
+                const counts = new Map();
+                tasks.forEach(t => { if (!t.isDeleted && t.serial) { const s = t.serial.trim(); if (s) counts.set(s, (counts.get(s) || 0) + 1); } });
+                const duplicates = new Set();
+                counts.forEach((count, key) => { if (count > 1) duplicates.add(key); });
+                return duplicates;
+            }, [tasks]);
+
+            const processedTasks = useMemo(() => {
+                let result = [...tasks];
+                if (viewStatus === 'active') result = result.filter(t => !t.completed && !t.isDeleted);
+                else if (viewStatus === 'completed') result = result.filter(t => t.completed && !t.isDeleted);
+                else if (viewStatus === 'deleted') result = result.filter(t => t.isDeleted);
+
+                if (currentTagFilter !== 'all') {
+                    if (currentTagFilter === 'uncategorized') result = result.filter(t => !t.tag || t.tag === 'default');
+                    else result = result.filter(t => t.tag === currentTagFilter);
+                }
+
+                if (searchQuery.trim()) {
+                    const q = searchQuery.toLowerCase();
+                    result = result.filter(t => (t.productName||'').toLowerCase().includes(q) || (t.serial||'').toLowerCase().includes(q) || (t.tag||'').toLowerCase().includes(q));
+                }
+
+                result.sort((a, b) => {
+                    const isDupA = duplicateSerials.has(a.serial);
+                    const isDupB = duplicateSerials.has(b.serial);
+                    if (isDupA && !isDupB) return -1;
+                    if (!isDupA && isDupB) return 1;
+                    if (sortType === 'expiring') {
+                        if (a.expiry && b.expiry) return new Date(a.expiry.replace(/[\.\-]/g, '/')) - new Date(b.expiry.replace(/[\.\-]/g, '/'));
+                        if (a.expiry) return -1; 
+                        if (b.expiry) return 1;
+                        return 0;
+                    } else if (sortType === 'oldest') {
+                        return (a.createdAt || 0) - (b.createdAt || 0);
+                    } else { // 'newest'
+                        return (b.createdAt || 0) - (a.createdAt || 0);
+                    }
+                });
+                
+                return result;
+            }, [tasks, viewStatus, currentTagFilter, searchQuery, sortType, duplicateSerials]);
+
+            // Handlers
+            const handleAddTask = ({ mode, pasteVal, manualName, manualSerial, manualExpiry, manualNote, manualUrl, manualTag, pendingImages, pendingMainImage, manualCreatedAt }) => {
+                let newTask = {};
+                const now = Date.now();
+                const id = 'task_' + now + '_' + Math.random().toString(36).substr(2,9);
+                
+                // Determine Creation Date
+                let createdTimestamp = now;
+                if (manualCreatedAt) {
+                    const d = new Date(manualCreatedAt);
+                    const today = new Date();
+                    if (d.toDateString() !== today.toDateString()) {
+                        d.setHours(12,0,0,0);
+                        createdTimestamp = d.getTime();
+                    }
+                }
+
+                const finalImages = pendingImages || [];
+                const finalMainImage = pendingMainImage || (finalImages.length > 0 ? finalImages[0] : '');
+
+                if (mode === 'paste') {
+                    const parsed = parseTicketInfo(pasteVal);
+                    const name = parsed.productName || (finalMainImage ? "圖片項目" : "未命名");
+                    
+                    newTask = { 
+                        id, 
+                        text: pasteVal, 
+                        originalRaw: pasteVal, 
+                        isTicket: parsed.isTicket || !!finalMainImage, 
+                        serial: parsed.serial, 
+                        productName: name, 
+                        expiry: parsed.expiry, 
+                        completed: false, 
+                        isDeleted: false, 
+                        createdAt: createdTimestamp, 
+                        note: '', 
+                        url: '', 
+                        tag: manualTag, 
+                        image: finalMainImage,
+                        images: finalImages
+                    };
+                } else {
+                    const fmtExpiry = manualExpiry ? manualExpiry.replace(/-/g, '/') : '';
+                    newTask = { 
+                        id, 
+                        text: manualName, 
+                        originalRaw: pasteVal || '', 
+                        isTicket: (!!manualSerial.trim() || !!finalMainImage), 
+                        serial: manualSerial.trim(), 
+                        productName: manualName, 
+                        expiry: fmtExpiry, 
+                        completed: false, 
+                        isDeleted: false, 
+                        createdAt: createdTimestamp, 
+                        note: manualNote, 
+                        url: manualUrl, 
+                        tag: manualTag, 
+                        image: finalMainImage,
+                        images: finalImages
+                    };
+                }
+                setTasks(prev => [newTask, ...prev]);
+                setViewStatus('active');
+            };
+
+            const handleUpdateTicket = (id, name, serial, expiry, image, images, url, note, tag, newCreatedAt) => {
+                setTasks(prev => prev.map(t => t.id === id ? { 
+                    ...t, 
+                    productName: name, 
+                    serial, 
+                    expiry, 
+                    image, 
+                    images,
+                    url, 
+                    note, 
+                    tag,
+                    createdAt: newCreatedAt || t.createdAt 
+                } : t));
+            };
+            
+            const handleToggleComplete = (task) => { 
+                const newStatus = !task.completed;
+                if (newStatus === true && tgToken && tgChatId) {
+                    const msg = `🎫 *票券已使用完畢* \n\n📦 *品名*: ${task.productName || '未命名'} \n🔢 *序號*: \`${task.serial || '無'}\` \n📅 *期限*: ${task.expiry || '無'} \n⏰ *時間*: ${new Date().toLocaleString('zh-TW')}`;
+                    sendTelegramMessage(tgToken, tgChatId, msg);
+                }
+                setTasks(prev => prev.map(t => t.id === task.id ? { ...t, completed: newStatus, completedAt: newStatus ? Date.now() : null } : t));
+            };
+            
+            const handleDelete = (id) => { 
+                setTasks(prev => prev.map(t => t.id === id ? { ...t, isDeleted: true, deletedAt: Date.now() } : t));
+            };
+            
+            const handleRestore = (task) => { 
+                setTasks(prev => prev.map(t => t.id === task.id ? { ...t, isDeleted: false, completed: false } : t));
+            };
+            
+            const handlePermanentDelete = (id) => { 
+                if (confirm("永久刪除？")) setTasks(prev => prev.filter(t => t.id !== id));
+            };
+            
+            const handleBatchDelete = () => { 
+                if (!selectedTasks.size) return; 
+                const isRecycleBin = viewStatus === 'deleted';
+                const confirmMsg = isRecycleBin 
+                    ? `確定要永久刪除這 ${selectedTasks.size} 個項目嗎？\n此動作無法復原！`
+                    : `確定要將這 ${selectedTasks.size} 個項目移至回收桶嗎？`;
+                if(confirm(confirmMsg)) { 
+                    if (isRecycleBin) {
+                        setTasks(prev => prev.filter(t => !selectedTasks.has(t.id)));
+                    } else {
+                        setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, isDeleted: true } : t));
+                    }
+                    setIsSelectionMode(false); 
+                    setSelectedTasks(new Set()); 
+                }
+            };
+            
+            const handleSelectAll = () => {
+                if (processedTasks.length === 0) return;
+                const allSelected = processedTasks.every(task => selectedTasks.has(task.id));
+                const newSet = new Set(selectedTasks);
+                if (allSelected) processedTasks.forEach(task => newSet.delete(task.id));
+                else processedTasks.forEach(task => newSet.add(task.id));
+                setSelectedTasks(newSet);
+            };
+
+            const handleSelect = (id) => { 
+                const newSet = new Set(selectedTasks); 
+                if (newSet.has(id)) newSet.delete(id); 
+                else newSet.add(id); 
+                setSelectedTasks(newSet); 
+            };
+
+            const handleBatchRestore = async (data, mode) => { 
+                const newTasks = data.map(item => ({
+                    ...item, 
+                    id: 'restored_' + Date.now() + '_' + Math.random().toString(36).substr(2,9), 
+                    createdAt: item.createdAt || Date.now() 
+                }));
+
+                if (mode === 'overwrite') {
+                    setTasks(newTasks);
+                } else {
+                    setTasks(prev => [...newTasks, ...prev]);
+                }
+            };
+
+            // Gallery Handlers
+            const addToGallery = (imgOrArray, isFullUpdate = false) => {
+                if(isFullUpdate) {
+                    setGallery(imgOrArray);
+                } else {
+                    if(!gallery.includes(imgOrArray)) {
+                        setGallery(prev => [imgOrArray, ...prev]);
+                    }
+                }
+            };
+
+            // Render
+            if (!isJoined) return <LoginScreen onJoin={(id)=>{setWorkspaceId(id); localStorage.setItem('ticket_offline_workspace_id', id); setIsJoined(true);}} />;
+
+            return (
+                <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-32">
+                    {/* Top Header */}
+                    <div className="sticky top-0 z-30 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 transition-colors">
+                        <div className="max-w-3xl mx-auto px-4 py-3">
+                            <div className="flex justify-between items-center mb-3">
+                                <h1 className="font-extrabold text-lg text-slate-800 dark:text-white flex items-center gap-2">
+                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.1</span>
+                                </h1>
+                                <div className="flex items-center gap-3">
+                                    <button onClick={()=>setIsDarkMode(!isDarkMode)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
+                                        {isDarkMode ? <Sun size={20} className="text-yellow-400"/> : <Moon size={20}/>}
+                                    </button>
+                                    
+                                    {/* Updated Menu Logic */}
+                                    <div className="relative" ref={menuRef}>
+                                        <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full text-slate-500"><MoreVertical size={20}/></button>
+                                        
+                                        {isMenuOpen && (
+                                            <div className="absolute right-0 top-full mt-1 bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-xl shadow-xl p-1 min-w-[150px] z-50 animate-in">
+                                                <div className="px-3 py-2 text-xs font-bold text-slate-400 border-b border-slate-100 dark:border-slate-700 mb-1">ID: {workspaceId}</div>
+                                                <button onClick={() => { setShowSettings(true); setIsMenuOpen(false); }} className="w-full text-left px-3 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-slate-700 rounded-lg flex gap-2"><BellRing size={16} /> 通知設定</button>
+                                                <button onClick={() => { setShowDataTools(true); setIsMenuOpen(false); }} className="w-full text-left px-3 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-slate-700 rounded-lg flex gap-2"><Database size={16} /> 備份還原</button>
+                                                <button onClick={() => { localStorage.removeItem('ticket_offline_workspace_id'); setIsJoined(false); }} className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg flex gap-2"><LogIn size={16}/> 登出 (切換清單)</button>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {/* Search Bar */}
+                            <div className="relative w-full">
+                                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="搜尋..." className="w-full pl-9 pr-2 py-2 text-sm bg-slate-100 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 dark:text-white transition-all" />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Content */}
+                    <div className="max-w-3xl mx-auto px-4 py-4">
+                        {/* Dashboard */}
+                        {viewStatus === 'active' && <Dashboard tasks={tasks} expiryThreshold={expiryThreshold} />}
+
+                        {/* Filter Bar */}
+                        <div className="mb-4">
+                            <div className="flex gap-2 overflow-x-auto no-scrollbar items-center pb-1">
+                                <button onClick={() => setCurrentTagFilter('all')} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap border transition-colors ${currentTagFilter === 'all' ? 'bg-slate-800 text-white border-slate-800 dark:bg-slate-200 dark:text-slate-900' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>全部</button>
+                                {tags.map(tag => (
+                                    <button key={tag} onClick={() => setCurrentTagFilter(tag)} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1 border transition-colors ${currentTagFilter === tag ? 'bg-blue-600 text-white border-blue-600' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
+                                        <Tag size={10} /> {tag}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Sorting & Config Bar */}
+                        <div className="flex justify-between items-center mb-4">
+                            <div className="flex items-center gap-2">
+                                <button onClick={()=>setIsSelectionMode(!isSelectionMode)} className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${isSelectionMode ? 'bg-slate-800 text-white dark:bg-white dark:text-slate-900' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'}`}>{isSelectionMode ? '完成選取' : '多選'}</button>
+                                
+                                {isSelectionMode && (
+                                    <button 
+                                        onClick={handleSelectAll} 
+                                        className="text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 flex items-center gap-1 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors"
+                                    >
+                                        <CheckSquareIcon size={12}/> 
+                                        {processedTasks.length > 0 && processedTasks.every(t => selectedTasks.has(t.id)) ? '取消全選' : '全選'}
+                                    </button>
+                                )}
+
+                                {isSelectionMode && selectedTasks.size > 0 && (
+                                    <button onClick={handleBatchDelete} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 flex items-center gap-1">
+                                        <Trash size={12}/> 
+                                        {viewStatus === 'deleted' ? '永久刪除' : '刪除'} 
+                                        ({selectedTasks.size})
+                                    </button>
+                                )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1 bg-amber-50 dark:bg-amber-900/20 px-2 py-1 rounded-md border border-amber-100 dark:border-amber-800/30">
+                                    <Clock size={12} className="text-amber-500" />
+                                    <select value={expiryThreshold} onChange={(e) => setExpiryThreshold(parseInt(e.target.value))} className="bg-transparent outline-none font-bold text-amber-800 dark:text-amber-500 text-[10px]"><option value="7">7天</option><option value="14">14天</option><option value="30">30天</option><option value="90">90天</option></select>
+                                </div>
+                                <select value={sortType} onChange={(e)=>setSortType(e.target.value)} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 text-xs rounded-lg py-1.5 px-2 outline-none font-bold">
+                                    <option value="expiring">快到期</option><option value="newest">最新</option><option value="oldest">最早</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        {/* List */}
+                        {loading ? (
+                            <div className="text-center py-20 text-slate-400 animate-pulse">載入中...</div>
+                        ) : processedTasks.length === 0 ? (
+                            <div className="text-center py-20 opacity-50">
+                                <div className="bg-slate-200 dark:bg-slate-700 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4"><ListTodo size={40} className="text-slate-400 dark:text-slate-500"/></div>
+                                <p className="text-slate-400 dark:text-slate-500 font-bold">這裡空空如也</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-1">
+                                {processedTasks.map(task => (
+                                    <TaskItem 
+                                        key={task.id} 
+                                        task={task} 
+                                        tags={tags} 
+                                        gallery={gallery}
+                                        presetNames={presetNames}
+                                        onAddToGallery={addToGallery}
+                                        onManagePresets={() => setShowPresetManager(true)}
+                                        onToggle={handleToggleComplete} 
+                                        onDelete={handleDelete} 
+                                        onRestore={handleRestore} 
+                                        onPermanentDelete={handlePermanentDelete} 
+                                        onUpdateTicket={handleUpdateTicket} 
+                                        isSelectionMode={isSelectionMode} 
+                                        isSelected={selectedTasks.has(task.id)} 
+                                        onSelect={handleSelect} 
+                                        expiryThreshold={expiryThreshold} 
+                                        isDuplicate={duplicateSerials.has(task.serial)} 
+                                        isDarkMode={isDarkMode} 
+                                        onManageTags={() => setShowTagManager(true)}
+                                        onPreviewImage={(src) => setPreviewImage(src)}
+                                    />
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* FAB (Add Button) */}
+                    <button 
+                        onClick={() => setIsAddModalOpen(true)}
+                        className="fixed bottom-24 right-5 bg-blue-600 hover:bg-blue-700 text-white w-14 h-14 rounded-full shadow-xl shadow-blue-600/40 flex items-center justify-center z-40 transition-transform active:scale-90"
+                    >
+                        <Plus size={28} />
+                    </button>
+
+                    {/* Bottom Nav */}
+                    <BottomNav view={viewStatus} setView={setViewStatus} counts={{ active: tasks.filter(t=>!t.completed && !t.isDeleted).length }} />
+                    
+                    {/* Modals */}
+                    <AddTaskModal 
+                        isOpen={isAddModalOpen} 
+                        onClose={()=>setIsAddModalOpen(false)} 
+                        onAdd={handleAddTask} 
+                        tags={tags} 
+                        onManageTags={() => setShowTagManager(true)} 
+                        gallery={gallery}
+                        onAddToGallery={addToGallery}
+                        presetNames={presetNames}
+                        onManagePresets={() => setShowPresetManager(true)}
+                    />
+                    <TagManagerModal isOpen={showTagManager} onClose={() => setShowTagManager(false)} tags={tags} onAddTag={(t)=>{if(!tags.includes(t)) setTags([...tags,t])}} onDeleteTag={(t)=>{setTags(tags.filter(x=>x!==t))}} onRenameTag={(o,n)=>{setTags(tags.map(t=>t===o?n:t))}} />
+                    <PresetManagerModal isOpen={showPresetManager} onClose={() => setShowPresetManager(false)} presets={presetNames} onAddPreset={(n)=>{if(!presetNames.includes(n)) setPresetNames([...presetNames,n])}} onDeletePreset={(n)=>{setPresetNames(presetNames.filter(x=>x!==n))}} />
+                    {showDataTools && <DataToolsModal isOpen={showDataTools} onClose={() => setShowDataTools(false)} tasks={tasks} onRestore={handleBatchRestore}/>}
+                    {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} tgToken={tgToken} setTgToken={setTgToken} tgChatId={tgChatId} setTgChatId={setTgChatId} notifyDays={notifyDays} setNotifyDays={setNotifyDays} onSave={handleSaveSettings} />}
+                    {previewImage && <ImagePreviewModal src={previewImage} onClose={() => setPreviewImage(null)} />}
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
