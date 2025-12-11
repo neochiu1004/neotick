@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V2.1 Multi-Image)</title>
+    <title>離線票券管家 (V2.3 Batch Mode+)</title>
     
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -110,6 +110,12 @@
             color: rgba(255,255,255,0.05);
             border-color: rgba(255,255,255,0.05);
         }
+        
+        /* Batch Edit Panel Animation */
+        .batch-panel-enter { transform: translateY(100%); opacity: 0; }
+        .batch-panel-enter-active { transform: translateY(0); opacity: 1; transition: all 0.3s cubic-bezier(0,0,0.2,1); }
+        .batch-panel-exit { transform: translateY(0); opacity: 1; }
+        .batch-panel-exit-active { transform: translateY(100%); opacity: 0; transition: all 0.2s cubic-bezier(0.4,0,1,1); }
     </style>
 </head>
 <body class="bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-100 transition-colors duration-300">
@@ -127,7 +133,7 @@
             Image as ImageIcon, Upload, Clipboard, ClipboardList, AlertTriangle, Download, FileJson, Database, FolderInput,
             LayoutDashboard, Moon, Sun, ChevronUp, ChevronDown, Filter, AlertOctagon, CheckSquare as CheckSquareIcon,
             Bell, BellRing, Send, UserCheck, CloudCog, Maximize2, Wand2, WifiOff, FileUp, Replace, FilePlus2, RefreshCw,
-            ImagePlus, Heart, HeartHandshake, Eye, EyeOff, Globe, BookOpen, Star, History, MousePointerClick
+            ImagePlus, Heart, HeartHandshake, Eye, EyeOff, Globe, BookOpen, Star, History, MousePointerClick, Layers
         } from 'lucide-react';
 
         // --- Helpers ---
@@ -192,61 +198,142 @@
             try { await fetch(url, { mode: 'no-cors' }); return true; } catch (error) { console.error("TG Send Error:", error); return false; }
         };
 
-        // --- 1. 改進後的智慧辨識邏輯 (V2) ---
-        const parseTicketInfo = (text) => {
-            const result = { isTicket: false, serial: '', productName: '', expiry: '', originalText: text };
-            
-            const serialMatch = text.match(/(?:票券序號|序號|CODE|Code|密碼|PIN)[:：\s]*([A-Za-z0-9\-\s]{8,})/i);
-            
-            if (serialMatch) { 
-                const candidate = serialMatch[1].trim();
-                if (candidate.length > 8 && !candidate.startsWith('202') && !candidate.includes('/')) { 
-                    result.isTicket = true; 
-                    result.serial = candidate;
+        // --- 1. 改進後的智慧辨識邏輯 (V2.2 Batch) ---
+        const parseBatchTicketInfo = (text, overrideName, overrideTag, overrideImages) => {
+            const results = [];
+            const lines = text.split(/\r?\n/); // Split by newline
+            let currentNameCandidate = "";
+            let foundAny = false;
+
+            // Helper to clean lines
+            const cleanLine = (l) => l.trim();
+
+            lines.forEach((rawLine, index) => {
+                const line = cleanLine(rawLine);
+                if (!line) return;
+
+                // Keyword skip
+                if (line.includes("兌換期限") || line.includes("序號")) return;
+
+                // Try to find Date and Serial
+                const dateMatch = line.match(/\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2}/);
+                const dateStr = dateMatch ? dateMatch[0].replace(/[\.\-]/g, '/') : "";
+                
+                // Serial Regex: Look for long alphanumeric strings (at least 9 chars to be safe)
+                // Filter out dates (YYYYMMDD is 8 chars, so >8 helps, but be careful)
+                // Remove the date part first to avoid matching YYYYMMDD as serial
+                const lineWithoutDate = line.replace(/\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2}/, '');
+                
+                // Enhanced Serial Matcher
+                let serialStr = "";
+                const serialMatch = lineWithoutDate.match(/[A-Za-z0-9]{9,30}/);
+                if (serialMatch) {
+                    // Check if it's not just a number that looks like a date or phone
+                    if (!/^20\d{6}$/.test(serialMatch[0])) {
+                         serialStr = serialMatch[0];
+                    }
                 }
-            } 
-            
-            if (!result.serial) {
-                const potentialCodes = text.match(/\b[A-Za-z0-9\-]{9,30}\b/g);
-                if (potentialCodes) {
-                    const validCodes = potentialCodes.filter(code => {
-                        if (code.length <= 8) return false;
-                        if (code.startsWith('202')) return false;
-                        if (code.includes('/')) return false;
-                        if (/^19\d{6}$/.test(code)) return false;
-                        return true;
+
+                if (serialStr) {
+                    // Found a ticket block!
+                    foundAny = true;
+                    
+                    // Determine Name
+                    let finalName = "未命名票券";
+                    if (overrideName && overrideName.trim()) {
+                        finalName = overrideName.trim();
+                    } else if (currentNameCandidate) {
+                        finalName = currentNameCandidate;
+                    } else {
+                         // Try to look back 1-2 lines for a name if candidate is empty
+                         if (index > 0 && cleanLine(lines[index-1]).length > 2 && !lines[index-1].includes("兌換期限")) {
+                             finalName = cleanLine(lines[index-1]);
+                         }
+                    }
+
+                    results.push({
+                        text: rawLine,
+                        originalRaw: rawLine,
+                        isTicket: true,
+                        serial: serialStr,
+                        productName: finalName,
+                        expiry: dateStr,
+                        tag: overrideTag || 'default',
+                        images: overrideImages || [],
+                        image: (overrideImages && overrideImages.length > 0) ? overrideImages[0] : ''
                     });
 
-                    if (validCodes.length > 0) {
-                        const strongCandidate = validCodes.find(code => 
-                            (code.match(/[A-Za-z]/) && code.match(/[0-9]/)) || 
-                            code.includes('-')
-                        );
-                        const finalChoice = strongCandidate || validCodes[0];
-                        if (finalChoice) {
-                            result.isTicket = true;
-                            result.serial = finalChoice;
-                        }
+                    // Don't reset currentNameCandidate immediately as the list might group items under one header
+                    // But if the pattern is Name -> Code, Name -> Code, we should allow update.
+                    // The loop continues, if we hit a non-code line next, it becomes the new candidate.
+                } else {
+                    // This line is not a code. Treat as potential name for NEXT code.
+                    // Ignore if it looks like a date only
+                    if (!dateStr && line.length > 2) {
+                        currentNameCandidate = line;
                     }
+                }
+            });
+
+            // Fallback for single line paste that wasn't caught by the "lines" logic or simple structure
+            if (!foundAny && text.trim()) {
+                // Use original single parser logic
+                const singleResult = parseTicketInfoV1(text);
+                if (singleResult.isTicket || singleResult.productName !== "未命名票券") {
+                     results.push({
+                        ...singleResult,
+                        productName: (overrideName && overrideName.trim()) ? overrideName.trim() : singleResult.productName,
+                        tag: overrideTag || 'default',
+                        images: overrideImages || [],
+                        image: (overrideImages && overrideImages.length > 0) ? overrideImages[0] : ''
+                     });
+                } else if (overrideImages && overrideImages.length > 0) {
+                     // Image only ticket
+                     results.push({
+                        text: text,
+                        originalRaw: text,
+                        isTicket: true,
+                        serial: '',
+                        productName: overrideName || "圖片票券",
+                        expiry: '',
+                        tag: overrideTag || 'default',
+                        images: overrideImages,
+                        image: overrideImages[0]
+                     });
                 }
             }
 
-            const dateRegex = /(\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2})/g;
-            const dateMatches = text.match(dateRegex);
-            if (dateMatches && dateMatches.length > 0) result.expiry = dateMatches[dateMatches.length - 1];
+            return results;
+        };
+
+        // Legacy V1 Parser for fallback
+        const parseTicketInfoV1 = (text) => {
+            const result = { isTicket: false, serial: '', productName: '', expiry: '', originalText: text };
+            const serialMatch = text.match(/(?:票券序號|序號|CODE|Code|密碼|PIN)[:：\s]*([A-Za-z0-9\-\s]{8,})/i);
+            if (serialMatch) { 
+                const candidate = serialMatch[1].trim();
+                if (candidate.length > 8 && !candidate.startsWith('202') && !candidate.includes('/')) { 
+                    result.isTicket = true; result.serial = candidate;
+                }
+            } 
+            if (!result.serial) {
+                const potentialCodes = text.match(/\b[A-Za-z0-9\-]{9,30}\b/g);
+                if (potentialCodes) {
+                    const validCodes = potentialCodes.filter(code => code.length > 8 && !code.startsWith('202') && !code.includes('/') && !/^19\d{6}$/.test(code));
+                    if (validCodes.length > 0) {
+                        result.isTicket = true;
+                        result.serial = validCodes.find(code => (code.match(/[A-Za-z]/) && code.match(/[0-9]/)) || code.includes('-')) || validCodes[0];
+                    }
+                }
+            }
+            const dateMatches = text.match(/(\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2})/g);
+            if (dateMatches && dateMatches.length > 0) result.expiry = dateMatches[dateMatches.length - 1].replace(/[\.\-]/g, '/');
             
             const nameMatch = text.match(/【(.*?)】/);
             if (nameMatch) { result.productName = nameMatch[1]; } 
             else if (result.isTicket || text.length > 0) {
                 const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-                const likelyName = lines.find(l => 
-                    l.length > 2 && l.length < 30 && 
-                    !l.includes('序號') && !l.includes('期限') && 
-                    (!result.serial || !l.includes(result.serial)) &&
-                    !l.match(/^\d{4}[\/\-\.]\d{2}/) && 
-                    !l.match(/^\d+$/) && 
-                    (l.includes('元') || l.includes('券') || l.includes('飲') || l.includes('餐') || l.includes('堡') || l.includes('咖啡') || l.includes('折') || l.includes('兌換') || l.includes('蛋'))
-                );
+                const likelyName = lines.find(l => l.length > 2 && l.length < 30 && !l.includes('序號') && !l.includes('期限') && (!result.serial || !l.includes(result.serial)) && !l.match(/^\d{4}/));
                 result.productName = likelyName || (lines[0] || "未命名票券");
             }
             if (!result.productName) result.productName = "未命名票券";
@@ -315,13 +402,11 @@
         };
         
         const ImagePreviewModal = ({ src, onClose, allImages }) => {
-            // Simple previewer - if allImages provided we could add swiping, but for now just single image
             if (!src) return null;
             return (
                 <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
                     <button className="absolute top-4 right-4 text-white p-2 bg-black/50 hover:bg-black/80 rounded-full transition-colors backdrop-blur-md border border-white/20 shadow-lg z-[70]"><X size={32}/></button>
                     <img src={src} className="max-w-full max-h-full object-contain rounded shadow-2xl" onClick={e => e.stopPropagation()}/>
-                    {/* Future: Add carousel if allImages.length > 1 */}
                 </div>
             );
         };
@@ -337,9 +422,6 @@
                         </div>
                         <div className="flex-1 overflow-y-auto bg-slate-100 dark:bg-slate-900 p-4 rounded-xl font-mono text-xs whitespace-pre-wrap break-all dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                             {content}
-                        </div>
-                        <div className="mt-4 text-center text-xs text-slate-400">
-                            此為系統解析前的原始內容 (Hidden Field)
                         </div>
                     </div>
                 </div>
@@ -381,7 +463,6 @@
                                 <div className="text-center py-10 text-slate-400">
                                     <ImagePlus size={48} className="mx-auto mb-2 opacity-50"/>
                                     <p>圖庫是空的</p>
-                                    <p className="text-xs">您可以點擊上方「上傳圖片」新增</p>
                                 </div>
                             ) : (
                                 <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
@@ -410,7 +491,7 @@
             const saveEdit = () => { if (editValue.trim() && editValue !== editingTag) { onRenameTag(editingTag, editValue.trim()); } setEditingTag(null); };
             
             return (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in">
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4 animate-in">
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-slate-100 dark:border-slate-700">
                         <div className="flex justify-between items-center mb-4"><h2 className="text-lg font-bold flex items-center gap-2 dark:text-white"><FolderPlus size={20} className="text-blue-600 dark:text-blue-400"/> 管理標籤</h2><button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button></div>
                         <div className="flex gap-2 mb-4"><input type="text" value={newTag} onChange={(e) => setNewTag(e.target.value)} placeholder="新標籤名稱" className="flex-1 px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white" /><button onClick={() => { if(newTag.trim()) { onAddTag(newTag.trim()); setNewTag(''); } }} className="bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700"><Plus size={18}/></button></div>
@@ -435,7 +516,7 @@
             if (!isOpen) return null;
             
             return (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in">
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4 animate-in">
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-slate-100 dark:border-slate-700">
                         <div className="flex justify-between items-center mb-4"><h2 className="text-lg font-bold flex items-center gap-2 dark:text-white"><BookOpen size={20} className="text-purple-600 dark:text-purple-400"/> 管理常用品名</h2><button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button></div>
                         <div className="flex gap-2 mb-4"><input type="text" value={newPreset} onChange={(e) => setNewPreset(e.target.value)} placeholder="輸入品名..." className="flex-1 px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-purple-500 text-sm bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white" /><button onClick={() => { if(newPreset.trim()) { onAddPreset(newPreset.trim()); setNewPreset(''); } }} className="bg-purple-600 text-white px-3 py-2 rounded-lg hover:bg-purple-700"><Plus size={18}/></button></div>
@@ -448,6 +529,83 @@
                             ))}
                         </div>
                     </div>
+                </div>
+            );
+        };
+        
+        // --- Batch Edit Panel Component ---
+        const BatchEditPanel = ({ selectedCount, tags, onUpdateName, onUpdateTag, onUpdateImage, onClose, gallery, onAddToGallery }) => {
+            const [name, setName] = useState('');
+            const [tag, setTag] = useState('');
+            const [showGallery, setShowGallery] = useState(false);
+            const fileInputRef = useRef(null);
+
+            const handleImageUpload = async (e) => {
+                if (e.target.files && e.target.files[0]) {
+                    try {
+                        const img = await compressImage(e.target.files[0]);
+                        onUpdateImage([img]); // Batch update takes array of images
+                    } catch(err) { alert('圖片讀取失敗'); }
+                }
+            };
+            
+            return (
+                <div className="fixed bottom-[70px] left-4 right-4 bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 z-50 animate-in p-4 flex flex-col gap-3">
+                    <div className="flex justify-between items-center border-b dark:border-slate-700 pb-2">
+                        <h3 className="font-bold text-slate-700 dark:text-white flex items-center gap-2">
+                            <Layers size={18} className="text-blue-600"/> 批量編輯 ({selectedCount} 筆)
+                        </h3>
+                        <button onClick={onClose} className="bg-slate-100 dark:bg-slate-700 rounded-full p-1"><X size={16}/></button>
+                    </div>
+                    
+                    <div className="flex gap-2 items-center">
+                        <div className="flex-1 flex gap-1">
+                            <input 
+                                value={name}
+                                onChange={e=>setName(e.target.value)}
+                                placeholder="統一修改名稱..."
+                                className="flex-1 bg-slate-50 dark:bg-slate-900 border dark:border-slate-700 rounded-lg px-2 py-1.5 text-sm dark:text-white"
+                            />
+                            <button onClick={()=>name.trim() && onUpdateName(name)} disabled={!name.trim()} className="bg-blue-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">改名</button>
+                        </div>
+                    </div>
+
+                    <div className="flex gap-2 items-center">
+                        <div className="flex-1 flex gap-1">
+                            <select 
+                                value={tag}
+                                onChange={e=>setTag(e.target.value)}
+                                className="flex-1 bg-slate-50 dark:bg-slate-900 border dark:border-slate-700 rounded-lg px-2 py-1.5 text-sm dark:text-white"
+                            >
+                                <option value="">選擇分類...</option>
+                                <option value="default">未分類</option>
+                                {tags.map(t=><option key={t} value={t}>{t}</option>)}
+                            </select>
+                            <button onClick={()=>tag && onUpdateTag(tag)} disabled={!tag} className="bg-blue-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">分類</button>
+                        </div>
+                    </div>
+                    
+                    <div className="flex gap-2">
+                         <button onClick={()=>fileInputRef.current.click()} className="flex-1 py-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-sm flex items-center justify-center gap-1 hover:bg-slate-200 dark:hover:bg-slate-600">
+                             <Upload size={14}/> 上傳圖片
+                         </button>
+                         <button onClick={()=>setShowGallery(true)} className="flex-1 py-1.5 bg-slate-100 dark:bg-slate-700 text-pink-500 rounded-lg text-sm flex items-center justify-center gap-1 hover:bg-slate-200 dark:hover:bg-slate-600">
+                             <ImagePlus size={14}/> 圖庫圖片
+                         </button>
+                    </div>
+                    
+                    <input type="file" ref={fileInputRef} hidden accept="image/*" onChange={handleImageUpload}/>
+                    
+                    {showGallery && (
+                        <GalleryModal 
+                            isOpen={showGallery} 
+                            onClose={()=>setShowGallery(false)} 
+                            images={gallery} 
+                            onSelect={(img)=>onUpdateImage([img])} 
+                            onAddImage={onAddToGallery} 
+                            onDelete={(idx)=> {const newG = [...gallery]; newG.splice(idx,1); onAddToGallery(newG, true);}} 
+                        />
+                    )}
                 </div>
             );
         };
@@ -468,7 +626,7 @@
             
             // Image Editing (Multiple)
             const [editImages, setEditImages] = useState(task.images || (task.image ? [task.image] : []));
-            const [editMainImage, setEditMainImage] = useState(task.image || ''); // The current cover
+            const [editMainImage, setEditMainImage] = useState(task.image || '');
             const [showGallery, setShowGallery] = useState(false);
             const [editUrlInput, setEditUrlInput] = useState('');
 
@@ -480,8 +638,6 @@
                     const mm = String(d.getMonth() + 1).padStart(2, '0');
                     const dd = String(d.getDate()).padStart(2, '0');
                     setEditCreatedAt(`${yyyy}-${mm}-${dd}`);
-                    
-                    // Sync images
                     setEditImages(task.images || (task.image ? [task.image] : []));
                     setEditMainImage(task.image || '');
                 }
@@ -524,8 +680,6 @@
                     newCreatedAt = d.getTime();
                 }
 
-                // If main image is not in list (shouldn't happen), use first of list, or just keep as is
-                // Ensure editMainImage is still valid
                 let finalMainImage = editMainImage;
                 if (editImages.length > 0 && !editImages.includes(editMainImage)) {
                     finalMainImage = editImages[0];
@@ -629,7 +783,6 @@
                         <div><label className="text-xs text-slate-400">序號</label><input className="w-full font-mono bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white" value={editSerial} onChange={e=>setEditSerial(e.target.value)}/></div>
                         <div><label className="text-xs text-slate-400">備註</label><textarea className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 h-16 resize-none dark:text-white" value={editNote} onChange={e=>setEditNote(e.target.value)}/></div>
                         
-                        {/* Edit Images Section */}
                         <div className="flex flex-col gap-2 pt-2 border-t dark:border-slate-700">
                             <label className="text-xs text-slate-400">圖片 (點擊設為封面)</label>
                             {editImages.length > 0 && (
@@ -672,12 +825,10 @@
                 );
             }
             
-            // Render View
             const hasMultipleImages = task.images && task.images.length > 1;
 
             return (
                 <div className={cardClasses} onClick={() => { if(!isSelectionMode && !isDeleted) setShowCodes(!showCodes); }}>
-                    {/* Raw Data Modal Trigger */}
                     {showRaw && <RawDataModal content={task.originalRaw || task.text || "無原始內容"} onClose={()=>setShowRaw(false)} />}
                     
                     <div className="absolute top-0 right-0 z-10 flex flex-col items-end">
@@ -742,7 +893,6 @@
                                 
                                 {task.note && <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded line-clamp-3 whitespace-pre-wrap"><StickyNote size={10} className="inline mr-1"/>{task.note}</p>}
                                 
-                                {/* New: Thumbnails for multiple images */}
                                 {hasMultipleImages && (
                                     <div className="flex gap-1 mt-2 overflow-x-auto no-scrollbar" onClick={e=>e.stopPropagation()}>
                                         {task.images.filter(img => img !== task.image).map((img, idx) => (
@@ -777,7 +927,6 @@
                                 </div>
                             </div>
 
-                            {/* Acquired Date Display */}
                             <div className="flex flex-col items-end gap-0.5 mr-auto ml-2 opacity-60">
                                 <span className="text-[10px] text-slate-400">取得日期</span>
                                 <div className="flex items-center gap-1 text-[10px] font-mono text-slate-500 dark:text-slate-400">
@@ -886,18 +1035,24 @@
             </div>
         );
 
-        const AddTaskModal = ({ isOpen, onClose, onAdd, tags, onManageTags, gallery, onAddToGallery, presetNames, onManagePresets }) => {
+        const AddTaskModal = ({ isOpen, onClose, onAddBatch, tags, onManageTags, gallery, onAddToGallery, presetNames, onManagePresets }) => {
             const [mode, setMode] = useState('paste');
             const [pasteVal, setPasteVal] = useState('');
+            
+            // Batch Override Settings for Paste Mode
+            const [batchName, setBatchName] = useState('');
+            const [batchTag, setBatchTag] = useState('default');
+            // Reusing pendingImages for both modes, acting as "Batch Images" in paste mode
+            
             const [manualName, setManualName] = useState('');
             const [manualSerial, setManualSerial] = useState('');
             const [manualExpiry, setManualExpiry] = useState('');
-            const [manualCreatedAt, setManualCreatedAt] = useState(''); // New: Created At
+            const [manualCreatedAt, setManualCreatedAt] = useState(''); 
             const [manualNote, setManualNote] = useState('');
             const [manualUrl, setManualUrl] = useState('');
             const [manualTag, setManualTag] = useState('default');
             
-            // Multiple Images State
+            // Images State
             const [pendingImages, setPendingImages] = useState([]);
             const [pendingMainImage, setPendingMainImage] = useState('');
 
@@ -911,9 +1066,9 @@
                     setManualExpiry(''); setManualNote(''); setManualUrl(''); 
                     setManualTag('default'); 
                     setPendingImages([]); setPendingMainImage('');
+                    setBatchName(''); setBatchTag('default');
                     setMode('paste');
                     setUrlInput(''); 
-                    // Default creation date is today
                     const today = new Date().toISOString().split('T')[0];
                     setManualCreatedAt(today);
                 }
@@ -925,17 +1080,12 @@
                     const img = await compressImage(urlInput);
                     addPendingImage(img);
                     setUrlInput('');
-                } catch(e) {
-                     window.open(urlInput, '_blank');
-                }
+                } catch(e) { window.open(urlInput, '_blank'); }
             };
             
             const addPendingImage = (img) => {
                 setPendingImages(prev => [...prev, img]);
-                // If it's the first image, set as main automatically
-                if (!pendingMainImage) {
-                    setPendingMainImage(img);
-                }
+                if (!pendingMainImage) setPendingMainImage(img);
             };
             
             const removePendingImage = (indexToRemove) => {
@@ -953,25 +1103,73 @@
             };
 
             const handleSubmit = () => {
-                const formattedExpiry = manualExpiry.replace(/-/g, '/');
-                onAdd({ 
-                    mode, 
-                    pasteVal, 
-                    manualName, 
-                    manualSerial, 
-                    manualExpiry: formattedExpiry, 
-                    manualNote, 
-                    manualUrl, 
-                    manualTag, 
-                    pendingImages, 
-                    pendingMainImage,
-                    manualCreatedAt 
-                });
+                const results = [];
+                const now = Date.now();
+                let createdTimestamp = now;
+                if (manualCreatedAt) {
+                    const d = new Date(manualCreatedAt);
+                    const today = new Date();
+                    if (d.toDateString() !== today.toDateString()) {
+                        d.setHours(12,0,0,0);
+                        createdTimestamp = d.getTime();
+                    }
+                }
+
+                if (mode === 'paste') {
+                    // Use new batch parser
+                    const parsedItems = parseBatchTicketInfo(pasteVal, batchName, batchTag, pendingImages);
+                    
+                    parsedItems.forEach((item, idx) => {
+                        results.push({
+                            id: 'task_' + now + '_' + idx + '_' + Math.random().toString(36).substr(2,5),
+                            text: item.text,
+                            originalRaw: item.originalRaw,
+                            isTicket: item.isTicket,
+                            serial: item.serial,
+                            productName: item.productName,
+                            expiry: item.expiry,
+                            completed: false,
+                            isDeleted: false,
+                            createdAt: createdTimestamp,
+                            note: '',
+                            url: '',
+                            tag: item.tag,
+                            image: item.image,
+                            images: item.images
+                        });
+                    });
+                } else {
+                    // Manual mode logic
+                    const fmtExpiry = manualExpiry.replace(/-/g, '/');
+                    const finalImages = pendingImages || [];
+                    const finalMainImage = pendingMainImage || (finalImages.length > 0 ? finalImages[0] : '');
+                    
+                    results.push({ 
+                        id: 'task_' + now + '_' + Math.random().toString(36).substr(2,9), 
+                        text: manualName, 
+                        originalRaw: pasteVal || '', 
+                        isTicket: (!!manualSerial.trim() || !!finalMainImage), 
+                        serial: manualSerial.trim(), 
+                        productName: manualName, 
+                        expiry: fmtExpiry, 
+                        completed: false, 
+                        isDeleted: false, 
+                        createdAt: createdTimestamp, 
+                        note: manualNote, 
+                        url: manualUrl, 
+                        tag: manualTag, 
+                        image: finalMainImage,
+                        images: finalImages
+                    });
+                }
+                
+                onAddBatch(results);
                 onClose();
             };
 
             const handleAnalyzeToManual = () => {
-                const parsed = parseTicketInfo(pasteVal);
+                // Legacy: Move first detected item to manual fields
+                const parsed = parseTicketInfoV1(pasteVal);
                 setManualName(parsed.productName || '');
                 setManualSerial(parsed.serial || '');
                 const dateStr = parsed.expiry ? parsed.expiry.replace(/\//g, '-').replace(/\./g, '-') : '';
@@ -1012,12 +1210,8 @@
                     try {
                         const compressed = await compressImage(imageBlob);
                         addPendingImage(compressed);
-                    } catch (err) {
-                        console.error("Paste image error", err);
-                    }
-                    if (text) {
-                        setPasteVal(prev => prev + (prev ? '\n' : '') + text);
-                    }
+                    } catch (err) { console.error(err); }
+                    if (text) setPasteVal(prev => prev + (prev ? '\n' : '') + text);
                 } 
             };
 
@@ -1032,7 +1226,7 @@
                         </div>
 
                         <div className="flex bg-slate-100 dark:bg-slate-700 p-1 rounded-xl mb-4">
-                            <button onClick={()=>setMode('paste')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'paste' ? 'bg-white dark:bg-slate-600 shadow text-blue-600 dark:text-blue-300' : 'text-slate-500'}`}>智慧貼上</button>
+                            <button onClick={()=>setMode('paste')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'paste' ? 'bg-white dark:bg-slate-600 shadow text-blue-600 dark:text-blue-300' : 'text-slate-500'}`}>智慧貼上 (批量)</button>
                             <button onClick={()=>setMode('manual')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'manual' ? 'bg-white dark:bg-slate-600 shadow text-blue-600 dark:text-blue-300' : 'text-slate-500'}`}>手動輸入</button>
                         </div>
 
@@ -1043,23 +1237,58 @@
                                         value={pasteVal} 
                                         onChange={e=>setPasteVal(e.target.value)} 
                                         onPaste={handlePaste} 
-                                        placeholder="在此貼上簡訊文字、票券內容、或直接貼上圖片..." 
-                                        className="w-full h-64 p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none resize-none dark:text-white focus:ring-2 focus:ring-blue-500 transition-all" 
+                                        placeholder="在此貼上多筆簡訊或文字...&#10;支援自動分割：「品名 -> 序號」或「品名 -> 期限 -> 序號」之格式" 
+                                        className="w-full h-40 p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none resize-none dark:text-white focus:ring-2 focus:ring-blue-500 transition-all" 
                                         autoFocus 
                                     />
                                     <div className="absolute bottom-3 right-3 pointer-events-none">
                                         <div className="bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400 text-[10px] px-2 py-1 rounded-md opacity-70">
-                                            支援 Ctrl+V 貼上圖片
+                                            支援批量解析
                                         </div>
                                     </div>
                                 </div>
                                 
+                                {/* Batch Pre-settings */}
+                                <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl border border-blue-100 dark:border-blue-800">
+                                    <h3 className="text-xs font-bold text-blue-600 dark:text-blue-400 mb-2 flex items-center gap-1"><Layers size={12}/> 預設值 (強制套用至所有解析結果)</h3>
+                                    <div className="space-y-2">
+                                        <div className="flex gap-2">
+                                            <div className="flex-1 flex gap-1">
+                                                <input 
+                                                    list="preset-names-batch"
+                                                    value={batchName}
+                                                    onChange={e=>setBatchName(e.target.value)}
+                                                    placeholder="指定品名 (選填)"
+                                                    className="flex-1 px-2 py-1.5 text-sm border rounded-lg outline-none bg-white dark:bg-slate-800 dark:border-slate-600 dark:text-white"
+                                                />
+                                                <datalist id="preset-names-batch">
+                                                    {presetNames.map(name => <option key={name} value={name} />)}
+                                                </datalist>
+                                                <button onClick={onManagePresets} className="px-2 bg-white dark:bg-slate-800 text-purple-600 rounded-lg border border-purple-200 hover:bg-purple-50 dark:border-slate-600"><BookOpen size={16}/></button>
+                                            </div>
+                                            
+                                            <div className="flex-1 flex gap-1">
+                                                <select 
+                                                    value={batchTag} 
+                                                    onChange={e=>setBatchTag(e.target.value)} 
+                                                    className="flex-1 px-2 py-1.5 text-sm border rounded-lg outline-none bg-white dark:bg-slate-800 dark:border-slate-600 dark:text-white"
+                                                >
+                                                    <option value="default">未分類</option>
+                                                    {tags.map(t=><option key={t} value={t}>{t}</option>)}
+                                                </select>
+                                                <button onClick={onManageTags} className="px-2 bg-white dark:bg-slate-800 text-blue-600 rounded-lg border border-blue-200 hover:bg-blue-50 dark:border-slate-600"><FolderPlus size={16}/></button>
+                                            </div>
+                                        </div>
+                                        <p className="text-[10px] text-slate-500 dark:text-slate-400">* 若設定品名，將忽略智慧辨識到的名稱。</p>
+                                    </div>
+                                </div>
+
                                 <button 
                                     onClick={handleAnalyzeToManual} 
                                     disabled={!pasteVal.trim()}
-                                    className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-purple-200 dark:shadow-none flex items-center justify-center gap-2 mb-2"
+                                    className="w-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300 font-bold py-2 rounded-lg text-sm flex items-center justify-center gap-2"
                                 >
-                                    <Wand2 size={16}/> 解析並帶入編輯
+                                    <ArrowRightLeft size={14}/> 僅解析第一筆並轉手動編輯
                                 </button>
                             </div>
                         ) : (
@@ -1102,7 +1331,7 @@
                             </div>
                         )}
 
-                        {/* Image Section */}
+                        {/* Image Section (Shared) */}
                         <div className="mt-4 pt-3 border-t dark:border-slate-700">
                              <div className="flex gap-2 justify-center mb-2 overflow-x-auto no-scrollbar">
                                 <button onClick={()=>fileInputRef.current.click()} className="flex items-center gap-1 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-slate-600 dark:text-slate-300 text-sm font-medium hover:bg-slate-200 whitespace-nowrap"><ImageIcon size={16}/> 上傳</button>
@@ -1110,13 +1339,11 @@
                                 <button onClick={()=>setShowGallery(true)} className="flex items-center gap-1 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-pink-500 text-sm font-medium hover:bg-slate-200 whitespace-nowrap"><ImagePlus size={16}/> 圖庫</button>
                             </div>
                             
-                            {/* URL Import */}
                             <div className="flex gap-2 mb-2">
                                 <input type="text" value={urlInput} onChange={e=>setUrlInput(e.target.value)} placeholder="或輸入圖片網址..." className="flex-1 px-3 py-2 text-sm border rounded-xl bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white outline-none"/>
                                 <button onClick={handleUrlImport} disabled={!urlInput} className="px-3 bg-blue-100 text-blue-600 rounded-xl disabled:opacity-50 hover:bg-blue-200 transition-colors"><Globe size={18}/></button>
                             </div>
 
-                            {/* Images Grid */}
                             {pendingImages.length > 0 && (
                                 <div className="mt-2 grid grid-cols-3 gap-2 animate-in w-full">
                                     {pendingImages.map((img, idx) => (
@@ -1138,7 +1365,7 @@
                         <input type="file" ref={fileInputRef} hidden accept="image/*" multiple onChange={handleImage} />
 
                         <button onClick={handleSubmit} disabled={mode==='paste' ? (!pasteVal && pendingImages.length===0) : !manualName} className="w-full mt-6 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-200 dark:shadow-none flex items-center justify-center gap-2">
-                            <Plus size={20}/> 建立票券
+                            <Plus size={20}/> {mode === 'paste' ? '批量建立' : '建立票券'}
                         </button>
 
                         {showGallery && <GalleryModal isOpen={showGallery} onClose={()=>setShowGallery(false)} images={gallery} onSelect={(img)=>{addPendingImage(img);}} onAddImage={onAddToGallery} onDelete={(idx)=> {const newG = [...gallery]; newG.splice(idx,1); onAddToGallery(newG, true);}} />}
@@ -1167,7 +1394,7 @@
 
             if (!isOpen) return null;
             return (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in">
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4 animate-in">
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-sm w-full p-6 border border-slate-100 dark:border-slate-700">
                         <div className="flex justify-between items-center mb-4">
                             <h2 className="text-lg font-bold dark:text-white flex items-center gap-2">
@@ -1317,7 +1544,7 @@
             };
 
             return (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in">
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4 animate-in">
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-lg w-full p-0 overflow-hidden flex flex-col max-h-[90vh] border border-slate-100 dark:border-slate-700">
                         <div className="p-4 border-b dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800">
                             <h2 className="font-bold text-lg flex items-center gap-2 text-slate-700 dark:text-white"><Database size={20}/> 資料備份與還原</h2>
@@ -1379,7 +1606,6 @@
                                         </div>
                                     ) : (
                                         <>
-                                            {/* File Import Section */}
                                             <div 
                                                 onClick={() => fileInputRef.current.click()}
                                                 className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-6 text-center cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors group"
@@ -1453,7 +1679,7 @@
             const [presetNames, setPresetNames] = useState([]); 
             const [loading, setLoading] = useState(false);
             
-            // Notification Settings (Synced to LocalStorage)
+            // Notification Settings
             const [tgToken, setTgToken] = useState('');
             const [tgChatId, setTgChatId] = useState('');
             const [notifyDays, setNotifyDays] = useState(7);
@@ -1476,25 +1702,21 @@
             const [showPresetManager, setShowPresetManager] = useState(false); 
             const [showDataTools, setShowDataTools] = useState(false);
             
-            // Menu Ref
             const menuRef = useRef(null);
             const [isMenuOpen, setIsMenuOpen] = useState(false);
 
-            // Effects
             useEffect(() => {
                 if (isDarkMode) document.documentElement.classList.add('dark');
                 else document.documentElement.classList.remove('dark');
                 localStorage.setItem('pref_theme', isDarkMode ? 'dark' : 'light');
             }, [isDarkMode]);
 
-            // OFFLINE: Load/Save Data
             const TASKS_KEY = `offline_tasks_${workspaceId}`;
             const TAGS_KEY = `offline_tags_${workspaceId}`;
             const GALLERY_KEY = `offline_gallery_${workspaceId}`; 
             const PRESET_NAMES_KEY = `offline_preset_names_${workspaceId}`; 
             const SETTINGS_KEY = `offline_settings_${workspaceId}`;
 
-            // 1. Initial Load
             useEffect(() => {
                 if (workspaceId) {
                     setIsJoined(true);
@@ -1519,40 +1741,14 @@
                 }
             }, [workspaceId]);
 
-            // 2. Persist Tasks on change
-            useEffect(() => {
-                if(isJoined && workspaceId) {
-                    localStorage.setItem(TASKS_KEY, JSON.stringify(tasks));
-                }
-            }, [tasks, workspaceId, isJoined]);
+            useEffect(() => { if(isJoined && workspaceId) localStorage.setItem(TASKS_KEY, JSON.stringify(tasks)); }, [tasks, workspaceId, isJoined]);
+            useEffect(() => { if(isJoined && workspaceId) localStorage.setItem(TAGS_KEY, JSON.stringify(tags)); }, [tags, workspaceId, isJoined]);
+            useEffect(() => { if(isJoined && workspaceId) localStorage.setItem(GALLERY_KEY, JSON.stringify(gallery)); }, [gallery, workspaceId, isJoined]);
+            useEffect(() => { if(isJoined && workspaceId) localStorage.setItem(PRESET_NAMES_KEY, JSON.stringify(presetNames)); }, [presetNames, workspaceId, isJoined]);
 
-            // 3. Persist Tags on change
-            useEffect(() => {
-                if(isJoined && workspaceId) {
-                    localStorage.setItem(TAGS_KEY, JSON.stringify(tags));
-                }
-            }, [tags, workspaceId, isJoined]);
-
-            // 4. Persist Gallery on change 
-            useEffect(() => {
-                if(isJoined && workspaceId) {
-                    localStorage.setItem(GALLERY_KEY, JSON.stringify(gallery));
-                }
-            }, [gallery, workspaceId, isJoined]);
-
-            // 5. Persist Preset Names on change
-            useEffect(() => {
-                if(isJoined && workspaceId) {
-                    localStorage.setItem(PRESET_NAMES_KEY, JSON.stringify(presetNames));
-                }
-            }, [presetNames, workspaceId, isJoined]);
-
-            // Menu Click Outside Listener
             useEffect(() => {
                 const handleClickOutside = (event) => {
-                    if (menuRef.current && !menuRef.current.contains(event.target)) {
-                        setIsMenuOpen(false);
-                    }
+                    if (menuRef.current && !menuRef.current.contains(event.target)) setIsMenuOpen(false);
                 };
                 document.addEventListener("mousedown", handleClickOutside);
                 return () => document.removeEventListener("mousedown", handleClickOutside);
@@ -1576,18 +1772,14 @@
                     
                     if (lastCheck !== todayStr) {
                         const expiringTasks = tasks.filter(t => !t.completed && !t.isDeleted && t.expiry && checkIsExpiringSoon(t.expiry, notifyDays));
-                        
                         if (expiringTasks.length > 0) {
                             let msg = `⚠️ *每日到期提醒 (${expiringTasks.length}筆)* \n`;
                             msg += `設定天數: ${notifyDays} 天內 \n\n`;
-                            
                             expiringTasks.slice(0, 10).forEach(t => {
                                 const days = getDaysRemaining(t.expiry);
                                 msg += `🔸 ${t.productName} (剩 ${days} 天) \n`;
                             });
-                            
                             if (expiringTasks.length > 10) msg += `...還有 ${expiringTasks.length - 10} 筆`;
-
                             sendTelegramMessage(tgToken, tgChatId, msg);
                         }
                         localStorage.setItem(lastCheckKey, todayStr);
@@ -1595,8 +1787,6 @@
                 }
             }, [isJoined, tasks, tgToken, tgChatId, notifyDays, workspaceId]);
 
-
-            // Filter Logic
             const duplicateSerials = useMemo(() => {
                 const counts = new Map();
                 tasks.forEach(t => { if (!t.isDeleted && t.serial) { const s = t.serial.trim(); if (s) counts.set(s, (counts.get(s) || 0) + 1); } });
@@ -1631,94 +1821,20 @@
                         if (a.expiry) return -1; 
                         if (b.expiry) return 1;
                         return 0;
-                    } else if (sortType === 'oldest') {
-                        return (a.createdAt || 0) - (b.createdAt || 0);
-                    } else { // 'newest'
-                        return (b.createdAt || 0) - (a.createdAt || 0);
-                    }
+                    } else if (sortType === 'oldest') return (a.createdAt || 0) - (b.createdAt || 0);
+                    else return (b.createdAt || 0) - (a.createdAt || 0);
                 });
-                
                 return result;
             }, [tasks, viewStatus, currentTagFilter, searchQuery, sortType, duplicateSerials]);
 
             // Handlers
-            const handleAddTask = ({ mode, pasteVal, manualName, manualSerial, manualExpiry, manualNote, manualUrl, manualTag, pendingImages, pendingMainImage, manualCreatedAt }) => {
-                let newTask = {};
-                const now = Date.now();
-                const id = 'task_' + now + '_' + Math.random().toString(36).substr(2,9);
-                
-                // Determine Creation Date
-                let createdTimestamp = now;
-                if (manualCreatedAt) {
-                    const d = new Date(manualCreatedAt);
-                    const today = new Date();
-                    if (d.toDateString() !== today.toDateString()) {
-                        d.setHours(12,0,0,0);
-                        createdTimestamp = d.getTime();
-                    }
-                }
-
-                const finalImages = pendingImages || [];
-                const finalMainImage = pendingMainImage || (finalImages.length > 0 ? finalImages[0] : '');
-
-                if (mode === 'paste') {
-                    const parsed = parseTicketInfo(pasteVal);
-                    const name = parsed.productName || (finalMainImage ? "圖片項目" : "未命名");
-                    
-                    newTask = { 
-                        id, 
-                        text: pasteVal, 
-                        originalRaw: pasteVal, 
-                        isTicket: parsed.isTicket || !!finalMainImage, 
-                        serial: parsed.serial, 
-                        productName: name, 
-                        expiry: parsed.expiry, 
-                        completed: false, 
-                        isDeleted: false, 
-                        createdAt: createdTimestamp, 
-                        note: '', 
-                        url: '', 
-                        tag: manualTag, 
-                        image: finalMainImage,
-                        images: finalImages
-                    };
-                } else {
-                    const fmtExpiry = manualExpiry ? manualExpiry.replace(/-/g, '/') : '';
-                    newTask = { 
-                        id, 
-                        text: manualName, 
-                        originalRaw: pasteVal || '', 
-                        isTicket: (!!manualSerial.trim() || !!finalMainImage), 
-                        serial: manualSerial.trim(), 
-                        productName: manualName, 
-                        expiry: fmtExpiry, 
-                        completed: false, 
-                        isDeleted: false, 
-                        createdAt: createdTimestamp, 
-                        note: manualNote, 
-                        url: manualUrl, 
-                        tag: manualTag, 
-                        image: finalMainImage,
-                        images: finalImages
-                    };
-                }
-                setTasks(prev => [newTask, ...prev]);
+            const handleBatchAdd = (newTasks) => {
+                setTasks(prev => [...newTasks, ...prev]);
                 setViewStatus('active');
             };
 
             const handleUpdateTicket = (id, name, serial, expiry, image, images, url, note, tag, newCreatedAt) => {
-                setTasks(prev => prev.map(t => t.id === id ? { 
-                    ...t, 
-                    productName: name, 
-                    serial, 
-                    expiry, 
-                    image, 
-                    images,
-                    url, 
-                    note, 
-                    tag,
-                    createdAt: newCreatedAt || t.createdAt 
-                } : t));
+                setTasks(prev => prev.map(t => t.id === id ? { ...t, productName: name, serial, expiry, image, images, url, note, tag, createdAt: newCreatedAt || t.createdAt } : t));
             };
             
             const handleToggleComplete = (task) => { 
@@ -1730,33 +1846,35 @@
                 setTasks(prev => prev.map(t => t.id === task.id ? { ...t, completed: newStatus, completedAt: newStatus ? Date.now() : null } : t));
             };
             
-            const handleDelete = (id) => { 
-                setTasks(prev => prev.map(t => t.id === id ? { ...t, isDeleted: true, deletedAt: Date.now() } : t));
-            };
-            
-            const handleRestore = (task) => { 
-                setTasks(prev => prev.map(t => t.id === task.id ? { ...t, isDeleted: false, completed: false } : t));
-            };
-            
-            const handlePermanentDelete = (id) => { 
-                if (confirm("永久刪除？")) setTasks(prev => prev.filter(t => t.id !== id));
-            };
+            const handleDelete = (id) => { setTasks(prev => prev.map(t => t.id === id ? { ...t, isDeleted: true, deletedAt: Date.now() } : t)); };
+            const handleRestore = (task) => { setTasks(prev => prev.map(t => t.id === task.id ? { ...t, isDeleted: false, completed: false } : t)); };
+            const handlePermanentDelete = (id) => { if (confirm("永久刪除？")) setTasks(prev => prev.filter(t => t.id !== id)); };
             
             const handleBatchDelete = () => { 
                 if (!selectedTasks.size) return; 
                 const isRecycleBin = viewStatus === 'deleted';
-                const confirmMsg = isRecycleBin 
-                    ? `確定要永久刪除這 ${selectedTasks.size} 個項目嗎？\n此動作無法復原！`
-                    : `確定要將這 ${selectedTasks.size} 個項目移至回收桶嗎？`;
-                if(confirm(confirmMsg)) { 
-                    if (isRecycleBin) {
-                        setTasks(prev => prev.filter(t => !selectedTasks.has(t.id)));
-                    } else {
-                        setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, isDeleted: true } : t));
-                    }
-                    setIsSelectionMode(false); 
-                    setSelectedTasks(new Set()); 
+                if(confirm(isRecycleBin ? `確定要永久刪除這 ${selectedTasks.size} 個項目嗎？` : `確定要將這 ${selectedTasks.size} 個項目移至回收桶嗎？`)) { 
+                    if (isRecycleBin) setTasks(prev => prev.filter(t => !selectedTasks.has(t.id)));
+                    else setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, isDeleted: true } : t));
+                    setIsSelectionMode(false); setSelectedTasks(new Set()); 
                 }
+            };
+            
+            // Batch Update Handlers
+            const handleBatchUpdateName = (name) => {
+                setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, productName: name } : t));
+                setIsSelectionMode(false); setSelectedTasks(new Set());
+            };
+            
+            const handleBatchUpdateTag = (tag) => {
+                setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, tag: tag } : t));
+                setIsSelectionMode(false); setSelectedTasks(new Set());
+            };
+
+            const handleBatchUpdateImage = (images) => {
+                const mainImg = images[0];
+                setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, image: mainImg, images: images } : t));
+                setIsSelectionMode(false); setSelectedTasks(new Set());
             };
             
             const handleSelectAll = () => {
@@ -1770,57 +1888,36 @@
 
             const handleSelect = (id) => { 
                 const newSet = new Set(selectedTasks); 
-                if (newSet.has(id)) newSet.delete(id); 
-                else newSet.add(id); 
+                if (newSet.has(id)) newSet.delete(id); else newSet.add(id); 
                 setSelectedTasks(newSet); 
             };
 
             const handleBatchRestore = async (data, mode) => { 
-                const newTasks = data.map(item => ({
-                    ...item, 
-                    id: 'restored_' + Date.now() + '_' + Math.random().toString(36).substr(2,9), 
-                    createdAt: item.createdAt || Date.now() 
-                }));
-
-                if (mode === 'overwrite') {
-                    setTasks(newTasks);
-                } else {
-                    setTasks(prev => [...newTasks, ...prev]);
-                }
+                const newTasks = data.map(item => ({ ...item, id: 'restored_' + Date.now() + '_' + Math.random().toString(36).substr(2,9), createdAt: item.createdAt || Date.now() }));
+                if (mode === 'overwrite') setTasks(newTasks); else setTasks(prev => [...newTasks, ...prev]);
             };
 
-            // Gallery Handlers
             const addToGallery = (imgOrArray, isFullUpdate = false) => {
-                if(isFullUpdate) {
-                    setGallery(imgOrArray);
-                } else {
-                    if(!gallery.includes(imgOrArray)) {
-                        setGallery(prev => [imgOrArray, ...prev]);
-                    }
-                }
+                if(isFullUpdate) setGallery(imgOrArray);
+                else if(!gallery.includes(imgOrArray)) setGallery(prev => [imgOrArray, ...prev]);
             };
 
-            // Render
             if (!isJoined) return <LoginScreen onJoin={(id)=>{setWorkspaceId(id); localStorage.setItem('ticket_offline_workspace_id', id); setIsJoined(true);}} />;
 
             return (
                 <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-32">
-                    {/* Top Header */}
                     <div className="sticky top-0 z-30 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 transition-colors">
                         <div className="max-w-3xl mx-auto px-4 py-3">
                             <div className="flex justify-between items-center mb-3">
                                 <h1 className="font-extrabold text-lg text-slate-800 dark:text-white flex items-center gap-2">
-                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.1</span>
+                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.2</span>
                                 </h1>
                                 <div className="flex items-center gap-3">
                                     <button onClick={()=>setIsDarkMode(!isDarkMode)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
                                         {isDarkMode ? <Sun size={20} className="text-yellow-400"/> : <Moon size={20}/>}
                                     </button>
-                                    
-                                    {/* Updated Menu Logic */}
                                     <div className="relative" ref={menuRef}>
                                         <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full text-slate-500"><MoreVertical size={20}/></button>
-                                        
                                         {isMenuOpen && (
                                             <div className="absolute right-0 top-full mt-1 bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-xl shadow-xl p-1 min-w-[150px] z-50 animate-in">
                                                 <div className="px-3 py-2 text-xs font-bold text-slate-400 border-b border-slate-100 dark:border-slate-700 mb-1">ID: {workspaceId}</div>
@@ -1832,8 +1929,6 @@
                                     </div>
                                 </div>
                             </div>
-                            
-                            {/* Search Bar */}
                             <div className="relative w-full">
                                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                                 <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="搜尋..." className="w-full pl-9 pr-2 py-2 text-sm bg-slate-100 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 dark:text-white transition-all" />
@@ -1841,12 +1936,9 @@
                         </div>
                     </div>
 
-                    {/* Content */}
                     <div className="max-w-3xl mx-auto px-4 py-4">
-                        {/* Dashboard */}
                         {viewStatus === 'active' && <Dashboard tasks={tasks} expiryThreshold={expiryThreshold} />}
 
-                        {/* Filter Bar */}
                         <div className="mb-4">
                             <div className="flex gap-2 overflow-x-auto no-scrollbar items-center pb-1">
                                 <button onClick={() => setCurrentTagFilter('all')} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap border transition-colors ${currentTagFilter === 'all' ? 'bg-slate-800 text-white border-slate-800 dark:bg-slate-200 dark:text-slate-900' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>全部</button>
@@ -1858,11 +1950,9 @@
                             </div>
                         </div>
 
-                        {/* Sorting & Config Bar */}
                         <div className="flex justify-between items-center mb-4">
                             <div className="flex items-center gap-2">
                                 <button onClick={()=>setIsSelectionMode(!isSelectionMode)} className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${isSelectionMode ? 'bg-slate-800 text-white dark:bg-white dark:text-slate-900' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'}`}>{isSelectionMode ? '完成選取' : '多選'}</button>
-                                
                                 {isSelectionMode && (
                                     <button 
                                         onClick={handleSelectAll} 
@@ -1872,7 +1962,6 @@
                                         {processedTasks.length > 0 && processedTasks.every(t => selectedTasks.has(t.id)) ? '取消全選' : '全選'}
                                     </button>
                                 )}
-
                                 {isSelectionMode && selectedTasks.size > 0 && (
                                     <button onClick={handleBatchDelete} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 flex items-center gap-1">
                                         <Trash size={12}/> 
@@ -1892,7 +1981,6 @@
                             </div>
                         </div>
 
-                        {/* List */}
                         {loading ? (
                             <div className="text-center py-20 text-slate-400 animate-pulse">載入中...</div>
                         ) : processedTasks.length === 0 ? (
@@ -1930,7 +2018,6 @@
                         )}
                     </div>
 
-                    {/* FAB (Add Button) */}
                     <button 
                         onClick={() => setIsAddModalOpen(true)}
                         className="fixed bottom-24 right-5 bg-blue-600 hover:bg-blue-700 text-white w-14 h-14 rounded-full shadow-xl shadow-blue-600/40 flex items-center justify-center z-40 transition-transform active:scale-90"
@@ -1938,14 +2025,12 @@
                         <Plus size={28} />
                     </button>
 
-                    {/* Bottom Nav */}
                     <BottomNav view={viewStatus} setView={setViewStatus} counts={{ active: tasks.filter(t=>!t.completed && !t.isDeleted).length }} />
                     
-                    {/* Modals */}
                     <AddTaskModal 
                         isOpen={isAddModalOpen} 
                         onClose={()=>setIsAddModalOpen(false)} 
-                        onAdd={handleAddTask} 
+                        onAddBatch={handleBatchAdd} 
                         tags={tags} 
                         onManageTags={() => setShowTagManager(true)} 
                         gallery={gallery}
@@ -1953,6 +2038,21 @@
                         presetNames={presetNames}
                         onManagePresets={() => setShowPresetManager(true)}
                     />
+                    
+                    {/* Batch Edit Panel (New) */}
+                    {isSelectionMode && selectedTasks.size > 0 && (
+                        <BatchEditPanel 
+                            selectedCount={selectedTasks.size} 
+                            tags={tags} 
+                            onUpdateName={handleBatchUpdateName} 
+                            onUpdateTag={handleBatchUpdateTag} 
+                            onUpdateImage={handleBatchUpdateImage}
+                            gallery={gallery}
+                            onAddToGallery={addToGallery}
+                            onClose={() => { setIsSelectionMode(false); setSelectedTasks(new Set()); }}
+                        />
+                    )}
+
                     <TagManagerModal isOpen={showTagManager} onClose={() => setShowTagManager(false)} tags={tags} onAddTag={(t)=>{if(!tags.includes(t)) setTags([...tags,t])}} onDeleteTag={(t)=>{setTags(tags.filter(x=>x!==t))}} onRenameTag={(o,n)=>{setTags(tags.map(t=>t===o?n:t))}} />
                     <PresetManagerModal isOpen={showPresetManager} onClose={() => setShowPresetManager(false)} presets={presetNames} onAddPreset={(n)=>{if(!presetNames.includes(n)) setPresetNames([...presetNames,n])}} onDeletePreset={(n)=>{setPresetNames(presetNames.filter(x=>x!==n))}} />
                     {showDataTools && <DataToolsModal isOpen={showDataTools} onClose={() => setShowDataTools(false)} tasks={tasks} onRestore={handleBatchRestore}/>}
