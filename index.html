@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V2.4 Batch Optimized)</title>
+    <title>離線票券管家 (V2.5 增強版)</title>
     
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -513,7 +513,8 @@
         };
         
         // --- Batch Edit Panel Component ---
-        const BatchEditPanel = ({ selectedCount, tags, onUpdateName, onUpdateTag, onUpdateImage, onClose, gallery, onAddToGallery }) => {
+        // 增強 BatchEditPanel 以支援 管理標籤 和 常用品名
+        const BatchEditPanel = ({ selectedCount, tags, onUpdateName, onUpdateTag, onUpdateImage, onClose, gallery, onAddToGallery, onManageTags, onManagePresets, presetNames }) => {
             const [name, setName] = useState('');
             const [tag, setTag] = useState('');
             const [showGallery, setShowGallery] = useState(false);
@@ -537,18 +538,25 @@
                         <button onClick={onClose} className="bg-slate-100 dark:bg-slate-700 rounded-full p-1"><X size={16}/></button>
                     </div>
                     
+                    {/* 批量修改名稱 (新增常用品名管理) */}
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
                             <input 
+                                list="preset-names-batch-edit" // 使用 datalist 支援常用品名
                                 value={name}
                                 onChange={e=>setName(e.target.value)}
                                 placeholder="統一修改名稱..."
                                 className="flex-1 bg-slate-50 dark:bg-slate-900 border dark:border-slate-700 rounded-lg px-2 py-1.5 text-sm dark:text-white"
                             />
+                            <datalist id="preset-names-batch-edit">
+                                {presetNames.map(name => <option key={name} value={name} />)}
+                            </datalist>
+                            <button onClick={onManagePresets} className="px-2 bg-slate-100 dark:bg-slate-700 text-purple-600 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors" title="管理常用品名"><BookOpen size={16}/></button>
                             <button onClick={()=>name.trim() && onUpdateName(name)} disabled={!name.trim()} className="bg-blue-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">改名</button>
                         </div>
                     </div>
 
+                    {/* 批量修改分類 (新增標籤管理) */}
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
                             <select 
@@ -560,10 +568,12 @@
                                 <option value="default">未分類</option>
                                 {tags.map(t=><option key={t} value={t}>{t}</option>)}
                             </select>
+                            <button onClick={onManageTags} className="px-2 bg-slate-100 dark:bg-slate-700 text-blue-600 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors" title="管理標籤"><FolderPlus size={16}/></button>
                             <button onClick={()=>tag && onUpdateTag(tag)} disabled={!tag} className="bg-blue-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">分類</button>
                         </div>
                     </div>
                     
+                    {/* 批量圖片 */}
                     <div className="flex gap-2">
                          <button onClick={()=>fileInputRef.current.click()} className="flex-1 py-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-sm flex items-center justify-center gap-1 hover:bg-slate-200 dark:hover:bg-slate-600">
                              <Upload size={14}/> 上傳圖片
@@ -595,6 +605,13 @@
             const [isEditing, setIsEditing] = useState(false);
             const [showRaw, setShowRaw] = useState(false);
             
+            // ** 4. 多選時自動將有開啟的qrcode關閉 **
+            useEffect(() => {
+                if (isSelectionMode && showCodes) {
+                    setShowCodes(false);
+                }
+            }, [isSelectionMode]);
+
             // Edit States
             const [editName, setEditName] = useState(task.productName || task.text || '');
             const [editSerial, setEditSerial] = useState(task.serial || '');
@@ -1460,7 +1477,7 @@
             );
         };
 
-        const DataToolsModal = ({ isOpen, onClose, tasks, onRestore }) => {
+        const DataToolsModal = ({ isOpen, onClose, tasks, onRestore, onFullExport }) => {
             const [activeTab, setActiveTab] = useState('backup');
             const [restoreInput, setRestoreInput] = useState('');
             const [restoreStatus, setRestoreStatus] = useState('');
@@ -1484,12 +1501,9 @@
                 else { alert("❌ 複製失敗。請嘗試手動選取文字或改用「下載檔案」功能。"); }
             };
 
-            const handleDownload = () => {
-                const dataStr = JSON.stringify(tasks, null, 2);
-                const blob = new Blob([dataStr], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a'); a.href = url; a.download = `ticket_offline_backup_${new Date().toISOString().split('T')[0]}.json`;
-                a.click(); URL.revokeObjectURL(url);
+            // 調整為全匯出 (JSON) 的功能
+            const handleFullDownload = () => {
+                onFullExport(tasks);
             };
 
             const processImportData = (data) => {
@@ -1574,9 +1588,9 @@
                                             <div className="bg-slate-100 dark:bg-slate-600 p-3 rounded-full group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors"><Copy size={24} className="dark:text-white"/></div>
                                             <span className="text-sm font-bold text-slate-600 dark:text-slate-300">複製到剪貼簿</span>
                                         </button>
-                                        <button onClick={handleDownload} className="flex flex-col items-center justify-center gap-2 p-4 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-blue-300 transition-all group">
+                                        <button onClick={handleFullDownload} className="flex flex-col items-center justify-center gap-2 p-4 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-blue-300 transition-all group">
                                             <div className="bg-slate-100 dark:bg-slate-600 p-3 rounded-full group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors"><Download size={24} className="dark:text-white"/></div>
-                                            <span className="text-sm font-bold text-slate-600 dark:text-slate-300">下載成檔案</span>
+                                            <span className="text-sm font-bold text-slate-600 dark:text-slate-300">全匯出 (JSON 檔案)</span>
                                         </button>
                                     </div>
                                 </div>
@@ -1802,6 +1816,7 @@
                 return duplicates;
             }, [tasks]);
 
+            // ** 1. 相同序號時，重複的擺放一起方便比對與刪除 **
             const processedTasks = useMemo(() => {
                 let result = [...tasks];
                 if (viewStatus === 'active') result = result.filter(t => !t.completed && !t.isDeleted);
@@ -1821,18 +1836,54 @@
                 result.sort((a, b) => {
                     const isDupA = duplicateSerials.has(a.serial);
                     const isDupB = duplicateSerials.has(b.serial);
+                    
+                    // 1. 優先處理重複項目
                     if (isDupA && !isDupB) return -1;
                     if (!isDupA && isDupB) return 1;
+
+                    // 2. 如果都是重複項，按序號分組
+                    if (isDupA && isDupB) {
+                        if (a.serial < b.serial) return -1;
+                        if (a.serial > b.serial) return 1;
+                    }
+                    
+                    // 3. 按照選定的排序方式
                     if (sortType === 'expiring') {
-                        if (a.expiry && b.expiry) return new Date(a.expiry.replace(/[\.\-]/g, '/')) - new Date(b.expiry.replace(/[\.\-]/g, '/'));
-                        if (a.expiry) return -1; 
-                        if (b.expiry) return 1;
-                        return 0;
-                    } else if (sortType === 'oldest') return (a.createdAt || 0) - (b.createdAt || 0);
-                    else return (b.createdAt || 0) - (a.createdAt || 0);
+                        const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 假設無期限為一年後
+                        const dateB = b.expiry ? new Date(b.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+                        return dateA.getTime() - dateB.getTime();
+                    } else if (sortType === 'oldest') {
+                         return (a.createdAt || 0) - (b.createdAt || 0);
+                    } else { // newest
+                        return (b.createdAt || 0) - (a.createdAt || 0);
+                    }
                 });
                 return result;
             }, [tasks, viewStatus, currentTagFilter, searchQuery, sortType, duplicateSerials]);
+
+            // ** 2. 匯出功能 (公共方法) **
+            const handleExportTasks = (tasksToExport) => {
+                if (tasksToExport.length === 0) {
+                    alert("沒有選擇任何票券進行匯出。");
+                    return;
+                }
+                const dataStr = JSON.stringify(tasksToExport, null, 2);
+                const blob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; 
+                a.download = `ticket_export_${new Date().toISOString().split('T')[0]}_${tasksToExport.length}items.json`;
+                a.click(); URL.revokeObjectURL(url);
+                alert(`✅ 已成功匯出 ${tasksToExport.length} 筆票券！`);
+            };
+
+            const handleExportSelected = () => {
+                const tasksToExport = tasks.filter(t => selectedTasks.has(t.id));
+                handleExportTasks(tasksToExport);
+                // 匯出後結束多選模式
+                setIsSelectionMode(false); 
+                setSelectedTasks(new Set());
+                setShowBatchEditPanel(false);
+            };
 
             // Handlers
             const handleBatchAdd = (newTasks) => {
@@ -1918,7 +1969,7 @@
                         <div className="max-w-3xl mx-auto px-4 py-3">
                             <div className="flex justify-between items-center mb-3">
                                 <h1 className="font-extrabold text-lg text-slate-800 dark:text-white flex items-center gap-2">
-                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.4</span>
+                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.5</span>
                                 </h1>
                                 <div className="flex items-center gap-3">
                                     <button onClick={()=>setIsDarkMode(!isDarkMode)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
@@ -1959,7 +2010,7 @@
                         </div>
 
                         <div className="flex justify-between items-center mb-4">
-                            <div className="flex items-center gap-2">
+                            <div className="flex gap-2 overflow-x-auto no-scrollbar items-center pb-1">
                                 <button onClick={()=>{
                                     setIsSelectionMode(!isSelectionMode);
                                     if(isSelectionMode) { setSelectedTasks(new Set()); setShowBatchEditPanel(false); }
@@ -1974,13 +2025,23 @@
                                             {processedTasks.length > 0 && processedTasks.every(t => selectedTasks.has(t.id)) ? '取消全選' : '全選'}
                                         </button>
 
-                                        {/* 新增批量編輯按鈕 */}
+                                        {/* 3. 新增批量編輯按鈕 */}
                                         {selectedTasks.size > 0 && (
                                             <button 
                                                 onClick={() => setShowBatchEditPanel(true)} 
                                                 className="text-xs font-bold px-3 py-1.5 rounded-lg bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 flex items-center gap-1"
                                             >
                                                 <Layers size={12}/> 批量編輯
+                                            </button>
+                                        )}
+                                        
+                                        {/* 2. 新增匯出已選按鈕 */}
+                                        {selectedTasks.size > 0 && (
+                                            <button 
+                                                onClick={handleExportSelected}
+                                                className="text-xs font-bold px-3 py-1.5 rounded-lg bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 flex items-center gap-1"
+                                            >
+                                                <FileUp size={12}/> 匯出 ({selectedTasks.size})
                                             </button>
                                         )}
 
@@ -1994,7 +2055,7 @@
                                     </>
                                 )}
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-shrink-0">
                                 <div className="flex items-center gap-1 bg-amber-50 dark:bg-amber-900/20 px-2 py-1 rounded-md border border-amber-100 dark:border-amber-800/30">
                                     <Clock size={12} className="text-amber-500" />
                                     <select value={expiryThreshold} onChange={(e) => setExpiryThreshold(parseInt(e.target.value))} className="bg-transparent outline-none font-bold text-amber-800 dark:text-amber-500 text-[10px]"><option value="7">7天</option><option value="14">14天</option><option value="30">30天</option><option value="90">90天</option></select>
@@ -2073,13 +2134,16 @@
                             onUpdateImage={handleBatchUpdateImage}
                             gallery={gallery}
                             onAddToGallery={addToGallery}
+                            onManageTags={() => setShowTagManager(true)} // Pass handler
+                            onManagePresets={() => setShowPresetManager(true)} // Pass handler
+                            presetNames={presetNames} // Pass preset names
                             onClose={() => setShowBatchEditPanel(false)}
                         />
                     )}
 
                     <TagManagerModal isOpen={showTagManager} onClose={() => setShowTagManager(false)} tags={tags} onAddTag={(t)=>{if(!tags.includes(t)) setTags([...tags,t])}} onDeleteTag={(t)=>{setTags(tags.filter(x=>x!==t))}} onRenameTag={(o,n)=>{setTags(tags.map(t=>t===o?n:t))}} />
                     <PresetManagerModal isOpen={showPresetManager} onClose={() => setShowPresetManager(false)} presets={presetNames} onAddPreset={(n)=>{if(!presetNames.includes(n)) setPresetNames([...presetNames,n])}} onDeletePreset={(n)=>{setPresetNames(presetNames.filter(x=>x!==n))}} />
-                    {showDataTools && <DataToolsModal isOpen={showDataTools} onClose={() => setShowDataTools(false)} tasks={tasks} onRestore={handleBatchRestore}/>}
+                    {showDataTools && <DataToolsModal isOpen={showDataTools} onClose={() => setShowDataTools(false)} tasks={tasks} onRestore={handleBatchRestore} onFullExport={handleExportTasks}/>}
                     {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} tgToken={tgToken} setTgToken={setTgToken} tgChatId={tgChatId} setTgChatId={setTgChatId} notifyDays={notifyDays} setNotifyDays={setNotifyDays} onSave={handleSaveSettings} />}
                     {previewImage && <ImagePreviewModal src={previewImage} onClose={() => setPreviewImage(null)} />}
                 </div>
