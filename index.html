@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V2.5 增強版)</title>
+    <title>離線票券管家 (V2.5.1 修正版)</title>
     
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -198,7 +198,7 @@
             try { await fetch(url, { mode: 'no-cors' }); return true; } catch (error) { console.error("TG Send Error:", error); return false; }
         };
 
-        // --- 1. 改進後的智慧辨識邏輯 (V2.2 Batch) ---
+        // --- 1. 改進後的智慧辨識邏輯 (V2.5.1 Date Fix) ---
         const parseBatchTicketInfo = (text, overrideName, overrideTag, overrideImages) => {
             const results = [];
             const lines = text.split(/\r?\n/);
@@ -211,21 +211,37 @@
                 const line = cleanLine(rawLine);
                 if (!line) return;
 
-                if (line.includes("兌換期限") || line.includes("序號")) return;
-
+                // --- Date extraction (Handle YYYY/MM/DD format, even with prefix) ---
+                let dateStr = "";
                 const dateMatch = line.match(/\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2}/);
-                const dateStr = dateMatch ? dateMatch[0].replace(/[\.\-]/g, '/') : "";
+                if (dateMatch) {
+                    dateStr = dateMatch[0].replace(/[\.\-]/g, '/');
+                }
                 
                 const lineWithoutDate = line.replace(/\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2}/, '');
                 
+                // --- Serial extraction (Look for common prefixes or long alphanumeric strings) ---
                 let serialStr = "";
-                const serialMatch = lineWithoutDate.match(/[A-Za-z0-9]{9,30}/);
-                if (serialMatch) {
-                    if (!/^20\d{6}$/.test(serialMatch[0])) {
-                         serialStr = serialMatch[0];
+                // 1. Look for explicit prefixes like 券號, 序號, CODE
+                const serialMatch = lineWithoutDate.match(/(?:券號|券號：|序號|CODE|Code|密碼|PIN)[:：\s]*([A-Za-z0-9\-\s]{8,})/i);
+                if (serialMatch && serialMatch[1]) {
+                    serialStr = serialMatch[1].trim().replace(/\s/g, ''); // Remove spaces
+                } else {
+                    // 2. Look for long generic alphanumeric strings (9-30 chars)
+                    const potentialCodes = lineWithoutDate.match(/[A-Za-z0-9]{9,30}/g);
+                    if (potentialCodes) {
+                         const validCodes = potentialCodes.filter(code => 
+                            !/^20\d{6}$/.test(code) && // Avoid simple 8-digit years
+                            !/^\d{9,15}$/.test(code) && // Avoid long purely numeric timestamps/prices 
+                            (code.match(/[A-Za-z]/) || code.includes('-')) // Must have letters or hyphens to be likely a code
+                         );
+                         if (validCodes.length > 0) {
+                             serialStr = validCodes[0];
+                         }
                     }
                 }
-
+                
+                // --- Ticket Creation Logic ---
                 if (serialStr) {
                     foundAny = true;
                     
@@ -235,41 +251,75 @@
                     } else if (currentNameCandidate) {
                         finalName = currentNameCandidate;
                     } else {
-                         if (index > 0 && cleanLine(lines[index-1]).length > 2 && !lines[index-1].includes("兌換期限")) {
+                         // Fallback: use previous line as name if it seems like content
+                         if (index > 0 && cleanLine(lines[index-1]).length > 2 && !lines[index-1].includes("期限") && !lines[index-1].includes("狀態")) {
                              finalName = cleanLine(lines[index-1]);
                          }
                     }
 
                     results.push({
+                        id: 'task_' + Date.now() + '_' + index + '_' + Math.random().toString(36).substr(2,5), // New ID generation inside batch logic
                         text: rawLine,
                         originalRaw: rawLine,
                         isTicket: true,
                         serial: serialStr,
                         productName: finalName,
-                        expiry: dateStr,
+                        expiry: dateStr, // Use date extracted from current line
                         tag: overrideTag || 'default',
                         images: overrideImages || [],
-                        image: (overrideImages && overrideImages.length > 0) ? overrideImages[0] : ''
+                        image: (overrideImages && overrideImages.length > 0) ? overrideImages[0] : '',
+                        completed: false,
+                        isDeleted: false,
+                        createdAt: Date.now(),
+                        note: '',
+                        url: '',
                     });
+                    
+                    // Clear name candidate if a ticket was created, as the next name should be for the next ticket.
+                    currentNameCandidate = ""; 
+                    
+                } else if (dateStr) {
+                    // If it's a date line but no serial, check the *previous* ticket and see if we can assign the date.
+                    if (results.length > 0) {
+                        const lastResult = results[results.length - 1];
+                        // Only update if the previous result doesn't already have an expiry date
+                        if (!lastResult.expiry) {
+                            lastResult.expiry = dateStr;
+                        }
+                    }
+                
                 } else {
-                    if (!dateStr && line.length > 2) {
+                    // It's not a serial line, not a date line. It might be a name candidate.
+                    // Only update name candidate if the line is likely descriptive text.
+                    if (line.length > 2 && !line.includes('單價') && !line.includes('說明') && !line.includes('狀態') && !line.includes('兌換期限')) {
                         currentNameCandidate = line;
                     }
                 }
             });
 
+            // Fallback for single item or if no serials were found at all
             if (!foundAny && text.trim()) {
                 const singleResult = parseTicketInfoV1(text);
+                const finalImages = (overrideImages && overrideImages.length > 0) ? overrideImages : [];
+                const finalImage = finalImages.length > 0 ? finalImages[0] : '';
+                
                 if (singleResult.isTicket || singleResult.productName !== "未命名票券") {
                      results.push({
                         ...singleResult,
+                        id: 'task_' + Date.now() + '_' + Math.random().toString(36).substr(2,9),
                         productName: (overrideName && overrideName.trim()) ? overrideName.trim() : singleResult.productName,
                         tag: overrideTag || 'default',
-                        images: overrideImages || [],
-                        image: (overrideImages && overrideImages.length > 0) ? overrideImages[0] : ''
+                        images: finalImages,
+                        image: finalImage,
+                        completed: false,
+                        isDeleted: false,
+                        createdAt: Date.now(),
+                        note: '',
+                        url: '',
                      });
-                } else if (overrideImages && overrideImages.length > 0) {
+                } else if (finalImages.length > 0) {
                      results.push({
+                        id: 'task_' + Date.now() + '_' + Math.random().toString(36).substr(2,9),
                         text: text,
                         originalRaw: text,
                         isTicket: true,
@@ -277,8 +327,13 @@
                         productName: overrideName || "圖片票券",
                         expiry: '',
                         tag: overrideTag || 'default',
-                        images: overrideImages,
-                        image: overrideImages[0]
+                        images: finalImages,
+                        image: finalImage,
+                        completed: false,
+                        isDeleted: false,
+                        createdAt: Date.now(),
+                        note: '',
+                        url: '',
                      });
                 }
             }
@@ -288,9 +343,9 @@
 
         const parseTicketInfoV1 = (text) => {
             const result = { isTicket: false, serial: '', productName: '', expiry: '', originalText: text };
-            const serialMatch = text.match(/(?:票券序號|序號|CODE|Code|密碼|PIN)[:：\s]*([A-Za-z0-9\-\s]{8,})/i);
+            const serialMatch = text.match(/(?:票券序號|序號|CODE|Code|密碼|PIN|券號)[:：\s]*([A-Za-z0-9\-\s]{8,})/i);
             if (serialMatch) { 
-                const candidate = serialMatch[1].trim();
+                const candidate = serialMatch[1].trim().replace(/\s/g, '');
                 if (candidate.length > 8 && !candidate.startsWith('202') && !candidate.includes('/')) { 
                     result.isTicket = true; result.serial = candidate;
                 }
@@ -513,7 +568,6 @@
         };
         
         // --- Batch Edit Panel Component ---
-        // 增強 BatchEditPanel 以支援 管理標籤 和 常用品名
         const BatchEditPanel = ({ selectedCount, tags, onUpdateName, onUpdateTag, onUpdateImage, onClose, gallery, onAddToGallery, onManageTags, onManagePresets, presetNames }) => {
             const [name, setName] = useState('');
             const [tag, setTag] = useState('');
@@ -605,7 +659,7 @@
             const [isEditing, setIsEditing] = useState(false);
             const [showRaw, setShowRaw] = useState(false);
             
-            // ** 4. 多選時自動將有開啟的qrcode關閉 **
+            // 4. 多選時自動將有開啟的qrcode關閉
             useEffect(() => {
                 if (isSelectionMode && showCodes) {
                     setShowCodes(false);
@@ -1142,22 +1196,10 @@
                     const parsedItems = parseBatchTicketInfo(pasteVal, batchName, batchTag, pendingImages);
                     
                     parsedItems.forEach((item, idx) => {
+                        // IDs are now generated inside parseBatchTicketInfo
                         results.push({
-                            id: 'task_' + now + '_' + idx + '_' + Math.random().toString(36).substr(2,5),
-                            text: item.text,
-                            originalRaw: item.originalRaw,
-                            isTicket: item.isTicket,
-                            serial: item.serial,
-                            productName: item.productName,
-                            expiry: item.expiry,
-                            completed: false,
-                            isDeleted: false,
+                            ...item,
                             createdAt: createdTimestamp,
-                            note: '',
-                            url: '',
-                            tag: item.tag,
-                            image: item.image,
-                            images: item.images
                         });
                     });
                 } else {
@@ -1816,7 +1858,7 @@
                 return duplicates;
             }, [tasks]);
 
-            // ** 1. 相同序號時，重複的擺放一起方便比對與刪除 **
+            // 1. 相同序號時，重複的擺放一起方便比對與刪除
             const processedTasks = useMemo(() => {
                 let result = [...tasks];
                 if (viewStatus === 'active') result = result.filter(t => !t.completed && !t.isDeleted);
@@ -1861,7 +1903,7 @@
                 return result;
             }, [tasks, viewStatus, currentTagFilter, searchQuery, sortType, duplicateSerials]);
 
-            // ** 2. 匯出功能 (公共方法) **
+            // 2. 匯出功能 (公共方法)
             const handleExportTasks = (tasksToExport) => {
                 if (tasksToExport.length === 0) {
                     alert("沒有選擇任何票券進行匯出。");
@@ -1969,7 +2011,7 @@
                         <div className="max-w-3xl mx-auto px-4 py-3">
                             <div className="flex justify-between items-center mb-3">
                                 <h1 className="font-extrabold text-lg text-slate-800 dark:text-white flex items-center gap-2">
-                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.5</span>
+                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.5.1</span>
                                 </h1>
                                 <div className="flex items-center gap-3">
                                     <button onClick={()=>setIsDarkMode(!isDarkMode)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
@@ -2009,8 +2051,9 @@
                             </div>
                         </div>
 
-                        <div className="flex justify-between items-center mb-4">
-                            <div className="flex gap-2 overflow-x-auto no-scrollbar items-center pb-1">
+                        <div className="flex justify-between items-start mb-4">
+                            {/* 修正 1. 刪除按鈕被隱藏的問題，移除不必要的 overflow */}
+                            <div className="flex gap-2 items-center flex-wrap">
                                 <button onClick={()=>{
                                     setIsSelectionMode(!isSelectionMode);
                                     if(isSelectionMode) { setSelectedTasks(new Set()); setShowBatchEditPanel(false); }
@@ -2045,6 +2088,7 @@
                                             </button>
                                         )}
 
+                                        {/* 1. 刪除按鈕 (確保存在) */}
                                         {selectedTasks.size > 0 && (
                                             <button onClick={handleBatchDelete} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 flex items-center gap-1">
                                                 <Trash size={12}/> 
