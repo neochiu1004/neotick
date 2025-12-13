@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V2.6.1 批量輸入增強版)</title>
+    <title>離線票券管家 (V2.6.2 訂購人備註版)</title>
     
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -198,18 +198,25 @@
             try { await fetch(url, { mode: 'no-cors' }); return true; } catch (error) { console.error("TG Send Error:", error); return false; }
         };
 
-        // --- 1. 改進後的智慧辨識邏輯 (V2.5.1 Date Fix) ---
+        // --- 1. 改進後的智慧辨識邏輯 (V2.6.2 Add Purchaser to Note) ---
         const parseBatchTicketInfo = (text, overrideName, overrideTag, overrideImages) => {
             const results = [];
             const lines = text.split(/\r?\n/);
             let currentNameCandidate = "";
             let foundAny = false;
+            let currentPurchaser = ""; // NEW: 暫存訂購人資訊
 
             const cleanLine = (l) => l.trim();
 
             lines.forEach((rawLine, index) => {
                 const line = cleanLine(rawLine);
                 if (!line) return;
+                
+                // NEW: 提取訂購人資訊
+                const purchaserMatch = line.match(/(?:訂購人)[:：\s]*([\p{sc=Han}A-Za-z\s]+)/iu);
+                if (purchaserMatch && purchaserMatch[1].trim()) {
+                    currentPurchaser = purchaserMatch[1].trim();
+                }
 
                 // --- Date extraction (Handle YYYY/MM/DD format, even with prefix) ---
                 let dateStr = "";
@@ -252,10 +259,13 @@
                         finalName = currentNameCandidate;
                     } else {
                          // Fallback: use previous line as name if it seems like content
-                         if (index > 0 && cleanLine(lines[index-1]).length > 2 && !lines[index-1].includes("期限") && !lines[index-1].includes("狀態")) {
+                         if (index > 0 && cleanLine(lines[index-1]).length > 2 && !lines[index-1].includes("期限") && !lines[index-1].includes("狀態") && !lines[index-1].includes("訂購人")) {
                              finalName = cleanLine(lines[index-1]);
                          }
                     }
+                    
+                    // NEW: 組合備註
+                    let note = currentPurchaser ? `訂購人: ${currentPurchaser}` : '';
 
                     results.push({
                         id: 'task_' + Date.now() + '_' + index + '_' + Math.random().toString(36).substr(2,5), // New ID generation inside batch logic
@@ -271,12 +281,13 @@
                         completed: false,
                         isDeleted: false,
                         createdAt: Date.now(),
-                        note: '',
+                        note: note, // 設置備註
                         url: '',
                     });
                     
-                    // Clear name candidate if a ticket was created, as the next name should be for the next ticket.
+                    // Clear state for next ticket
                     currentNameCandidate = ""; 
+                    currentPurchaser = "";
                     
                 } else if (dateStr) {
                     // If it's a date line but no serial, check the *previous* ticket and see if we can assign the date.
@@ -289,7 +300,7 @@
                     }
                 
                 } else {
-                    // It's not a serial line, not a date line. It might be a name candidate.
+                    // It's not a serial line, not a date line, not a purchaser line. It might be a name candidate.
                     // Only update name candidate if the line is likely descriptive text.
                     if (line.length > 2 && !line.includes('單價') && !line.includes('說明') && !line.includes('狀態') && !line.includes('兌換期限')) {
                         currentNameCandidate = line;
@@ -303,6 +314,15 @@
                 const finalImages = (overrideImages && overrideImages.length > 0) ? overrideImages : [];
                 const finalImage = finalImages.length > 0 ? finalImages[0] : '';
                 
+                // Check purchaser again in the raw text if no tickets were created yet
+                if (!currentPurchaser) {
+                     const singlePurchaserMatch = text.match(/(?:訂購人)[:：\s]*([\p{sc=Han}A-Za-z\s]+)/iu);
+                     if (singlePurchaserMatch && singlePurchaserMatch[1].trim()) {
+                         currentPurchaser = singlePurchaserMatch[1].trim();
+                     }
+                }
+                const note = currentPurchaser ? `訂購人: ${currentPurchaser}` : '';
+
                 if (singleResult.isTicket || singleResult.productName !== "未命名票券") {
                      results.push({
                         ...singleResult,
@@ -314,7 +334,7 @@
                         completed: false,
                         isDeleted: false,
                         createdAt: Date.now(),
-                        note: '',
+                        note: note,
                         url: '',
                      });
                 } else if (finalImages.length > 0) {
@@ -332,7 +352,7 @@
                         completed: false,
                         isDeleted: false,
                         createdAt: Date.now(),
-                        note: '',
+                        note: note,
                         url: '',
                      });
                 }
@@ -598,7 +618,7 @@
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
                             <input 
-                                list="preset-names-batch-edit" // 2. 允許手動輸入或從名稱庫選擇
+                                list="preset-names-batch-edit" // 允許手動輸入或從名稱庫選擇
                                 value={name}
                                 onChange={e=>setName(e.target.value)}
                                 placeholder="統一修改名稱 (可手動輸入或選擇)..."
@@ -628,7 +648,6 @@
                     {/* 批量修改分類 (可輸入可選) */}
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
-                            {/* 替換為 datalist input */}
                             <input 
                                 list="tag-names-batch-edit"
                                 value={tag}
@@ -1961,7 +1980,7 @@
                 const a = document.createElement('a'); a.href = url; 
                 a.download = `ticket_export_${new Date().toISOString().split('T')[0]}_${tasksToExport.length}items.json`;
                 a.click(); URL.revokeObjectURL(url);
-                alert(`✅ 已成功匯出 ${tasksToToExport.length} 筆票券！`);
+                alert(`✅ 已成功匯出 ${tasksToExport.length} 筆票券！`);
             };
 
             const handleExportSelected = () => {
@@ -2059,7 +2078,7 @@
                         <div className="max-w-3xl mx-auto px-4 py-3">
                             <div className="flex justify-between items-center mb-3">
                                 <h1 className="font-extrabold text-lg text-slate-800 dark:text-white flex items-center gap-2">
-                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.6.1</span>
+                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.6.2</span>
                                 </h1>
                                 <div className="flex items-center gap-3">
                                     <button onClick={()=>setIsDarkMode(!isDarkMode)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
@@ -2225,8 +2244,8 @@
                         tags={tags} 
                         onManageTags={() => setShowTagManager(true)} 
                         gallery={gallery}
-                        onAddToGallery={addToGallery}
                         presetNames={presetNames}
+                        onAddToGallery={addToGallery}
                         onManagePresets={() => setShowPresetManager(true)}
                     />
                     
