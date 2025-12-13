@@ -212,9 +212,9 @@
                 const line = cleanLine(rawLine);
                 if (!line) return;
 
-                // --- 偵測訂購人 (Fix 1) ---
-                // 擴大偵測範圍，匹配直到行尾 (包含空格，但不包含換行符)
-                const ordererMatch = line.match(/(?:訂購人|購買者)[:：\s]*([^\n\r]+)/i);
+                // --- 偵測訂購人 ---
+                // 1. 偵測訂購人/購買者，並提取名字
+                const ordererMatch = line.match(/(?:訂購人|購買者)[:：\s]*([^,.\s\u0020]+)/i);
                 if (ordererMatch && ordererMatch[1]) {
                     currentOrderer = ordererMatch[1].trim();
                 }
@@ -269,7 +269,7 @@
                     let note = "";
                     if (currentOrderer) {
                         note = `訂購人: ${currentOrderer}`;
-                        currentOrderer = ""; // 清除訂購人
+                        currentOrderer = ""; // 清除訂購人，防止它被用於下一張不相關的票券
                     }
 
                     results.push({
@@ -300,6 +300,13 @@
                         // Only update if the previous result doesn't already have an expiry date
                         if (!lastResult.expiry) {
                             lastResult.expiry = dateStr;
+                        } else {
+                             // 如果已有日期，但這行有新的訂購人，則將訂購人備註加到最後一筆票券
+                             if(currentOrderer) {
+                                 const ordererNote = `訂購人: ${currentOrderer}`;
+                                 lastResult.note = lastResult.note ? `${lastResult.note}\n${ordererNote}` : ordererNote;
+                                 currentOrderer = "";
+                             }
                         }
                     }
                 
@@ -318,9 +325,9 @@
                 const finalImages = (overrideImages && overrideImages.length > 0) ? overrideImages : [];
                 const finalImage = finalImages.length > 0 ? finalImages[0] : '';
                 
-                // 1. 如果是單一模式，也嘗試提取訂購人 (Fix 1)
+                // 1. 如果是單一模式，也嘗試提取訂購人
                 let fallbackNote = "";
-                const ordererMatch = text.match(/(?:訂購人|購買者)[:：\s]*([^\n\r]+)/i);
+                const ordererMatch = text.match(/(?:訂購人|購買者)[:：\s]*([^,.\s\u0020]+)/i);
                 if (ordererMatch && ordererMatch[1]) {
                     fallbackNote = `訂購人: ${ordererMatch[1].trim()}`;
                 }
@@ -692,7 +699,7 @@
             );
         };
 
-        const TaskItem = ({ task, tags, onToggle, onDelete, onRestore, onPermanentDelete, onUpdateTicket, isSelectionMode, isSelected, onSelect, expiryThreshold, isDuplicate, isNoExpiry, isDarkMode, onManageTags, onPreviewImage, gallery, onAddToGallery, presetNames, onManagePresets }) => {
+        const TaskItem = ({ task, tags, onToggle, onDelete, onRestore, onPermanentDelete, onUpdateTicket, isSelectionMode, isSelected, onSelect, expiryThreshold, isDuplicate, isDarkMode, onManageTags, onPreviewImage, gallery, onAddToGallery, presetNames, onManagePresets }) => {
             const [showCodes, setShowCodes] = useState(false);
             const [justCopied, setJustCopied] = useState(false);
             const [isEditing, setIsEditing] = useState(false);
@@ -743,7 +750,7 @@
             
             if (isDuplicate && !isDeleted) {
                 cardClasses += 'border-2 border-red-500 shadow-xl shadow-red-200 dark:shadow-red-900/40 animate-pulse-red z-10 ';
-            } else if (isExpiring && !isDuplicate && !isNoExpiry) {
+            } else if (isExpiring && !isDeleted) {
                 cardClasses += 'border border-red-300 shadow-md shadow-red-100 ';
             }
 
@@ -934,13 +941,7 @@
                                 <AlertOctagon size={12} strokeWidth={3}/> 重複序號
                             </div>
                         )}
-                        {/* 2. 無期限警告 (只在非重複、非刪除狀態下顯示) */}
-                        {isNoExpiry && !isDuplicate && !isDeleted && (
-                            <div className="bg-amber-600 text-yellow-100 text-xs px-3 py-1 rounded-bl-lg font-black shadow-md mb-[1px] flex items-center gap-1 animate-bounce-slight border-l border-b border-white/20">
-                                <AlertOctagon size={12} strokeWidth={3}/> 無期限警告
-                            </div>
-                        )}
-                        {isExpiring && !isDuplicate && !isNoExpiry && !isDeleted && <div className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-bl-lg font-bold shadow-sm">即將到期</div>}
+                        {isExpiring && !isDuplicate && <div className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-bl-lg font-bold shadow-sm">即將到期</div>}
                     </div>
 
                     <div className="pt-4 pb-2 px-3 relative">
@@ -1902,18 +1903,6 @@
                 counts.forEach((count, key) => { if (count > 1) duplicates.add(key); });
                 return duplicates;
             }, [tasks]);
-            
-            // 2. 判斷無期限票券
-            const noExpiryTasks = useMemo(() => {
-                const noExpiry = new Set();
-                tasks.forEach(t => {
-                    if (!t.completed && !t.isDeleted && !t.expiry && t.isTicket) {
-                         noExpiry.add(t.id);
-                    }
-                });
-                return noExpiry;
-            }, [tasks]);
-
 
             // 處理排序和過濾，生成平面列表
             const filteredTasks = useMemo(() => {
@@ -1934,51 +1923,47 @@
                 
                 // 執行排序
                 result.sort((a, b) => {
-                    const isDupA = duplicateSerials.has(a.serial);
-                    const isDupB = duplicateSerials.has(b.serial);
+                    const isDupA = duplicateSerials.has(a.serial) && a.serial;
+                    const isDupB = duplicateSerials.has(b.serial) && b.serial;
                     
-                    // 2. 判斷無期限
-                    const isNoExpiryA = noExpiryTasks.has(a.id);
-                    const isNoExpiryB = noExpiryTasks.has(b.id);
-                    
-                    // Priority 1: 重複的票券移到最上面
+                    // 3. 重複的票券置頂
                     if (isDupA && !isDupB) return -1;
                     if (!isDupA && isDupB) return 1;
 
-                    // Priority 2: 無期限警告移到最上面 (在非重複項目中)
-                    if (!isDupA && !isDupB) {
-                        if (isNoExpiryA && !isNoExpiryB) return -1;
-                        if (!isNoExpiryA && isNoExpiryB) return 1;
-                    }
-                    
                     // 如果都是重複項，按序號分組
                     if (isDupA && isDupB) {
                         if (a.serial < b.serial) return -1;
                         if (a.serial > b.serial) return 1;
+                        // 如果序號相同，則按新增日期排序（最新的在前面）
+                        return (b.createdAt || 0) - (a.createdAt || 0);
                     }
                     
-                    // 3. 按照選定的排序方式
+                    // 非重複項目，按選定的排序方式
                     if (sortType === 'newest') {
-                        return (b.createdAt || 0) - (a.createdAt || 0); // 降序 (最新在前面)
-                    } else if (sortType === 'expiring') {
+                        return (b.createdAt || 0) - (a.createdAt || 0); // 降序 (最新在最上)
+                    } 
+                    
+                    if (sortType === 'expiring') {
                         const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); 
                         const dateB = b.expiry ? new Date(b.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
                         return dateA.getTime() - dateB.getTime(); // 升序 (最早的在前面)
                     } else if (sortType === 'oldest') {
                          return (a.createdAt || 0) - (b.createdAt || 0); // 升序 (最舊的在前面)
                     } else { 
+                        // Fallback to expiring
                         const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); 
                         const dateB = b.expiry ? new Date(b.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
                         return dateA.getTime() - dateB.getTime();
                     }
                 });
                 return result;
-            }, [tasks, viewStatus, currentTagFilter, searchQuery, sortType, duplicateSerials, noExpiryTasks]);
+            }, [tasks, viewStatus, currentTagFilter, searchQuery, sortType, duplicateSerials]);
 
             // 1. 每段同時間到期票券自成一個區域
             const groupedTasks = useMemo(() => {
                 const groups = new Map();
                 filteredTasks.forEach(task => {
+                    // 2. 無期限票券分組優化
                     const dateKey = task.expiry || 'No Expiry';
                     if (!groups.has(dateKey)) {
                         groups.set(dateKey, []);
@@ -1993,6 +1978,7 @@
 
                 // 排序分組: 優先過期日期 (最早->最晚)，然後是 "No Expiry"
                 groupArray.sort((a, b) => {
+                    // 處理重複項目分組的特殊排序，確保它們保持在最頂部 (通過 filteredTasks 的排序已達成，這裡只需處理過期日期的分組鍵排序)
                     const dateA = a.date === 'No Expiry' ? '9999/12/31' : a.date;
                     const dateB = b.date === 'No Expiry' ? '9999/12/31' : b.date;
                     return new Date(dateA) - new Date(dateB);
@@ -2228,6 +2214,7 @@
                                     >
                                         <h4 className={`text-sm font-black mb-3 px-1 flex items-center gap-2 ${group.date === 'No Expiry' ? 'text-slate-500 dark:text-slate-400' : 'text-blue-600 dark:text-blue-400'}`}>
                                             <Calendar size={14} className={group.date === 'No Expiry' ? 'text-slate-400' : 'text-blue-500'}/>
+                                            {/* 2. 顯示修正後的無期限分組標題 */}
                                             {group.date === 'No Expiry' ? '📅 永久/無期限票券' : `⏳ 期限：${group.date}`}
                                         </h4>
                                         <div className="space-y-1">
@@ -2250,7 +2237,6 @@
                                                     onSelect={handleSelect} 
                                                     expiryThreshold={expiryThreshold} 
                                                     isDuplicate={duplicateSerials.has(task.serial)} 
-                                                    isNoExpiry={noExpiryTasks.has(task.id)} // 2. 傳遞無期限狀態
                                                     isDarkMode={isDarkMode} 
                                                     onManageTags={() => setShowTagManager(true)}
                                                     onPreviewImage={(src) => setPreviewImage(src)}
