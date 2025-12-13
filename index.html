@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V2.5.1 修正版)</title>
+    <title>離線票券管家 (V2.6 批量增強版)</title>
     
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -568,9 +568,11 @@
         };
         
         // --- Batch Edit Panel Component ---
-        const BatchEditPanel = ({ selectedCount, tags, onUpdateName, onUpdateTag, onUpdateImage, onClose, gallery, onAddToGallery, onManageTags, onManagePresets, presetNames }) => {
+        // 增強 BatchEditPanel 以支援 管理標籤, 常用品名, 期限修改，並移除自動退出邏輯
+        const BatchEditPanel = ({ selectedCount, tags, onUpdateName, onUpdateTag, onUpdateImage, onUpdateDate, onClose, gallery, onAddToGallery, onManageTags, onManagePresets, presetNames }) => {
             const [name, setName] = useState('');
             const [tag, setTag] = useState('');
+            const [expiry, setExpiry] = useState(''); // 3. 批量修改期限
             const [showGallery, setShowGallery] = useState(false);
             const fileInputRef = useRef(null);
 
@@ -589,14 +591,15 @@
                         <h3 className="font-bold text-slate-700 dark:text-white flex items-center gap-2">
                             <Layers size={18} className="text-blue-600"/> 批量編輯 ({selectedCount} 筆)
                         </h3>
+                        {/* 4. 批量修改後不會自動退出，手動點擊 X 關閉面板 */}
                         <button onClick={onClose} className="bg-slate-100 dark:bg-slate-700 rounded-full p-1"><X size={16}/></button>
                     </div>
                     
-                    {/* 批量修改名稱 (新增常用品名管理) */}
+                    {/* 批量修改名稱 (支援名稱庫) */}
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
                             <input 
-                                list="preset-names-batch-edit" // 使用 datalist 支援常用品名
+                                list="preset-names-batch-edit" // 2. 使用 datalist 支援常用品名
                                 value={name}
                                 onChange={e=>setName(e.target.value)}
                                 placeholder="統一修改名稱..."
@@ -607,6 +610,19 @@
                             </datalist>
                             <button onClick={onManagePresets} className="px-2 bg-slate-100 dark:bg-slate-700 text-purple-600 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors" title="管理常用品名"><BookOpen size={16}/></button>
                             <button onClick={()=>name.trim() && onUpdateName(name)} disabled={!name.trim()} className="bg-blue-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">改名</button>
+                        </div>
+                    </div>
+                    
+                    {/* 3. 批量修改期限 */}
+                    <div className="flex gap-2 items-center">
+                        <div className="flex-1 flex gap-1">
+                            <input 
+                                type="date"
+                                value={expiry}
+                                onChange={e => setExpiry(e.target.value)}
+                                className="flex-1 bg-slate-50 dark:bg-slate-900 border dark:border-slate-700 rounded-lg px-2 py-1.5 text-sm dark:text-white dark:[color-scheme:dark]"
+                            />
+                            <button onClick={() => expiry.trim() && onUpdateDate(expiry)} disabled={!expiry.trim()} className="bg-blue-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">改期限</button>
                         </div>
                     </div>
 
@@ -1858,8 +1874,8 @@
                 return duplicates;
             }, [tasks]);
 
-            // 1. 相同序號時，重複的擺放一起方便比對與刪除
-            const processedTasks = useMemo(() => {
+            // 處理排序和過濾，生成平面列表
+            const filteredTasks = useMemo(() => {
                 let result = [...tasks];
                 if (viewStatus === 'active') result = result.filter(t => !t.completed && !t.isDeleted);
                 else if (viewStatus === 'completed') result = result.filter(t => t.completed && !t.isDeleted);
@@ -1874,7 +1890,8 @@
                     const q = searchQuery.toLowerCase();
                     result = result.filter(t => (t.productName||'').toLowerCase().includes(q) || (t.serial||'').toLowerCase().includes(q) || (t.tag||'').toLowerCase().includes(q));
                 }
-
+                
+                // 執行排序
                 result.sort((a, b) => {
                     const isDupA = duplicateSerials.has(a.serial);
                     const isDupB = duplicateSerials.has(b.serial);
@@ -1891,7 +1908,7 @@
                     
                     // 3. 按照選定的排序方式
                     if (sortType === 'expiring') {
-                        const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 假設無期限為一年後
+                        const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); 
                         const dateB = b.expiry ? new Date(b.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
                         return dateA.getTime() - dateB.getTime();
                     } else if (sortType === 'oldest') {
@@ -1902,6 +1919,33 @@
                 });
                 return result;
             }, [tasks, viewStatus, currentTagFilter, searchQuery, sortType, duplicateSerials]);
+
+            // 1. 每段同時間到期票券自成一個區域
+            const groupedTasks = useMemo(() => {
+                const groups = new Map();
+                filteredTasks.forEach(task => {
+                    const dateKey = task.expiry || 'No Expiry';
+                    if (!groups.has(dateKey)) {
+                        groups.set(dateKey, []);
+                    }
+                    groups.get(dateKey).push(task);
+                });
+
+                const groupArray = Array.from(groups.entries()).map(([date, tasks]) => ({
+                    date,
+                    tasks,
+                }));
+
+                // 排序分組: 優先過期日期 (最早->最晚)，然後是 "No Expiry"
+                groupArray.sort((a, b) => {
+                    const dateA = a.date === 'No Expiry' ? '9999/12/31' : a.date;
+                    const dateB = b.date === 'No Expiry' ? '9999/12/31' : b.date;
+                    return new Date(dateA) - new Date(dateB);
+                });
+
+                return groupArray;
+            }, [filteredTasks]);
+
 
             // 2. 匯出功能 (公共方法)
             const handleExportTasks = (tasksToExport) => {
@@ -1961,29 +2005,31 @@
                 }
             };
             
-            // Batch Update Handlers
+            // 4. 批量修改時，修改單項後不跳出選取模式
             const handleBatchUpdateName = (name) => {
                 setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, productName: name } : t));
-                setIsSelectionMode(false); setSelectedTasks(new Set()); setShowBatchEditPanel(false);
             };
             
             const handleBatchUpdateTag = (tag) => {
                 setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, tag: tag } : t));
-                setIsSelectionMode(false); setSelectedTasks(new Set()); setShowBatchEditPanel(false);
+            };
+
+            const handleBatchUpdateDate = (date) => {
+                const formattedExpiry = date.replace(/-/g, '/');
+                setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, expiry: formattedExpiry } : t));
             };
 
             const handleBatchUpdateImage = (images) => {
                 const mainImg = images[0];
                 setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, image: mainImg, images: images } : t));
-                setIsSelectionMode(false); setSelectedTasks(new Set()); setShowBatchEditPanel(false);
             };
             
             const handleSelectAll = () => {
-                if (processedTasks.length === 0) return;
-                const allSelected = processedTasks.every(task => selectedTasks.has(task.id));
+                if (filteredTasks.length === 0) return;
+                const allSelected = filteredTasks.every(task => selectedTasks.has(task.id));
                 const newSet = new Set(selectedTasks);
-                if (allSelected) processedTasks.forEach(task => newSet.delete(task.id));
-                else processedTasks.forEach(task => newSet.add(task.id));
+                if (allSelected) filteredTasks.forEach(task => newSet.delete(task.id));
+                else filteredTasks.forEach(task => newSet.add(task.id));
                 setSelectedTasks(newSet);
             };
 
@@ -2011,7 +2057,7 @@
                         <div className="max-w-3xl mx-auto px-4 py-3">
                             <div className="flex justify-between items-center mb-3">
                                 <h1 className="font-extrabold text-lg text-slate-800 dark:text-white flex items-center gap-2">
-                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.5.1</span>
+                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.6</span>
                                 </h1>
                                 <div className="flex items-center gap-3">
                                     <button onClick={()=>setIsDarkMode(!isDarkMode)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
@@ -2052,7 +2098,6 @@
                         </div>
 
                         <div className="flex justify-between items-start mb-4">
-                            {/* 修正 1. 刪除按鈕被隱藏的問題，移除不必要的 overflow */}
                             <div className="flex gap-2 items-center flex-wrap">
                                 <button onClick={()=>{
                                     setIsSelectionMode(!isSelectionMode);
@@ -2065,10 +2110,10 @@
                                             className="text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 flex items-center gap-1 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors"
                                         >
                                             <CheckSquareIcon size={12}/> 
-                                            {processedTasks.length > 0 && processedTasks.every(t => selectedTasks.has(t.id)) ? '取消全選' : '全選'}
+                                            {filteredTasks.length > 0 && filteredTasks.every(t => selectedTasks.has(t.id)) ? '取消全選' : '全選'}
                                         </button>
 
-                                        {/* 3. 新增批量編輯按鈕 */}
+                                        {/* 批量編輯按鈕 */}
                                         {selectedTasks.size > 0 && (
                                             <button 
                                                 onClick={() => setShowBatchEditPanel(true)} 
@@ -2078,7 +2123,7 @@
                                             </button>
                                         )}
                                         
-                                        {/* 2. 新增匯出已選按鈕 */}
+                                        {/* 匯出已選按鈕 */}
                                         {selectedTasks.size > 0 && (
                                             <button 
                                                 onClick={handleExportSelected}
@@ -2088,7 +2133,7 @@
                                             </button>
                                         )}
 
-                                        {/* 1. 刪除按鈕 (確保存在) */}
+                                        {/* 刪除按鈕 */}
                                         {selectedTasks.size > 0 && (
                                             <button onClick={handleBatchDelete} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 flex items-center gap-1">
                                                 <Trash size={12}/> 
@@ -2112,36 +2157,51 @@
 
                         {loading ? (
                             <div className="text-center py-20 text-slate-400 animate-pulse">載入中...</div>
-                        ) : processedTasks.length === 0 ? (
+                        ) : groupedTasks.length === 0 ? (
                             <div className="text-center py-20 opacity-50">
                                 <div className="bg-slate-200 dark:bg-slate-700 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4"><ListTodo size={40} className="text-slate-400 dark:text-slate-500"/></div>
                                 <p className="text-slate-400 dark:text-slate-500 font-bold">這裡空空如也</p>
                             </div>
                         ) : (
-                            <div className="space-y-1">
-                                {processedTasks.map(task => (
-                                    <TaskItem 
-                                        key={task.id} 
-                                        task={task} 
-                                        tags={tags} 
-                                        gallery={gallery}
-                                        presetNames={presetNames}
-                                        onAddToGallery={addToGallery}
-                                        onManagePresets={() => setShowPresetManager(true)}
-                                        onToggle={handleToggleComplete} 
-                                        onDelete={handleDelete} 
-                                        onRestore={handleRestore} 
-                                        onPermanentDelete={handlePermanentDelete} 
-                                        onUpdateTicket={handleUpdateTicket} 
-                                        isSelectionMode={isSelectionMode} 
-                                        isSelected={selectedTasks.has(task.id)} 
-                                        onSelect={handleSelect} 
-                                        expiryThreshold={expiryThreshold} 
-                                        isDuplicate={duplicateSerials.has(task.serial)} 
-                                        isDarkMode={isDarkMode} 
-                                        onManageTags={() => setShowTagManager(true)}
-                                        onPreviewImage={(src) => setPreviewImage(src)}
-                                    />
+                            <div className="space-y-4">
+                                {/* 1. 票券依期限分組渲染 */}
+                                {groupedTasks.map((group, groupIndex) => (
+                                    <div 
+                                        key={group.date} 
+                                        className={`rounded-xl shadow-md overflow-hidden p-3 transition-colors duration-300 
+                                            ${groupIndex % 2 === 0 ? 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700' : 'bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50'}`}
+                                    >
+                                        <h4 className={`text-sm font-black mb-3 px-1 flex items-center gap-2 ${group.date === 'No Expiry' ? 'text-slate-500 dark:text-slate-400' : 'text-blue-600 dark:text-blue-400'}`}>
+                                            <Calendar size={14} className={group.date === 'No Expiry' ? 'text-slate-400' : 'text-blue-500'}/>
+                                            {group.date === 'No Expiry' ? '📅 永久/無期限票券' : `⏳ 期限：${group.date}`}
+                                        </h4>
+                                        <div className="space-y-1">
+                                            {group.tasks.map(task => (
+                                                <TaskItem 
+                                                    key={task.id} 
+                                                    task={task} 
+                                                    tags={tags} 
+                                                    gallery={gallery}
+                                                    presetNames={presetNames}
+                                                    onAddToGallery={addToGallery}
+                                                    onManagePresets={() => setShowPresetManager(true)}
+                                                    onToggle={handleToggleComplete} 
+                                                    onDelete={handleDelete} 
+                                                    onRestore={handleRestore} 
+                                                    onPermanentDelete={handlePermanentDelete} 
+                                                    onUpdateTicket={handleUpdateTicket} 
+                                                    isSelectionMode={isSelectionMode} 
+                                                    isSelected={selectedTasks.has(task.id)} 
+                                                    onSelect={handleSelect} 
+                                                    expiryThreshold={expiryThreshold} 
+                                                    isDuplicate={duplicateSerials.has(task.serial)} 
+                                                    isDarkMode={isDarkMode} 
+                                                    onManageTags={() => setShowTagManager(true)}
+                                                    onPreviewImage={(src) => setPreviewImage(src)}
+                                                />
+                                            ))}
+                                        </div>
+                                    </div>
                                 ))}
                             </div>
                         )}
@@ -2176,11 +2236,12 @@
                             onUpdateName={handleBatchUpdateName} 
                             onUpdateTag={handleBatchUpdateTag} 
                             onUpdateImage={handleBatchUpdateImage}
+                            onUpdateDate={handleBatchUpdateDate} // 3. 批量修改期限
                             gallery={gallery}
                             onAddToGallery={addToGallery}
-                            onManageTags={() => setShowTagManager(true)} // Pass handler
-                            onManagePresets={() => setShowPresetManager(true)} // Pass handler
-                            presetNames={presetNames} // Pass preset names
+                            onManageTags={() => setShowTagManager(true)}
+                            onManagePresets={() => setShowPresetManager(true)}
+                            presetNames={presetNames}
                             onClose={() => setShowBatchEditPanel(false)}
                         />
                     )}
