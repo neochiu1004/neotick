@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V2.6.2 功能修復版)</title>
+    <title>離線票券管家 (V2.7 篩選優化版)</title>
     
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -133,7 +133,8 @@
             Image as ImageIcon, Upload, Clipboard, ClipboardList, AlertTriangle, Download, FileJson, Database, FolderInput,
             LayoutDashboard, Moon, Sun, ChevronUp, ChevronDown, Filter, AlertOctagon, CheckSquare as CheckSquareIcon,
             Bell, BellRing, Send, UserCheck, CloudCog, Maximize2, Wand2, WifiOff, FileUp, Replace, FilePlus2, RefreshCw,
-            ImagePlus, Heart, HeartHandshake, Eye, EyeOff, Globe, BookOpen, Star, History, MousePointerClick, Layers
+            ImagePlus, Heart, HeartHandshake, Eye, EyeOff, Globe, BookOpen, Star, History, MousePointerClick, Layers,
+            CalendarX2, CopyPlus
         } from 'lucide-react';
 
         // --- Helpers ---
@@ -198,13 +199,13 @@
             try { await fetch(url, { mode: 'no-cors' }); return true; } catch (error) { console.error("TG Send Error:", error); return false; }
         };
 
-        // --- 1. 增強後的智慧辨識邏輯 (加入訂購人備註) ---
+        // --- 智慧辨識邏輯 ---
         const parseBatchTicketInfo = (text, overrideName, overrideTag, overrideImages) => {
             const results = [];
             const lines = text.split(/\r?\n/);
             let currentNameCandidate = "";
             let foundAny = false;
-            let currentOrderer = ""; // 新增訂購人暫存
+            let currentOrderer = ""; 
 
             const cleanLine = (l) => l.trim();
 
@@ -212,14 +213,11 @@
                 const line = cleanLine(rawLine);
                 if (!line) return;
 
-                // --- 偵測訂購人 ---
-                // 1. 偵測訂購人/購買者，並提取名字
                 const ordererMatch = line.match(/(?:訂購人|購買者)[:：\s]*([^,.\s\u0020]+)/i);
                 if (ordererMatch && ordererMatch[1]) {
                     currentOrderer = ordererMatch[1].trim();
                 }
 
-                // --- Date extraction (Handle YYYY/MM/DD format, even with prefix) ---
                 let dateStr = "";
                 const dateMatch = line.match(/\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2}/);
                 if (dateMatch) {
@@ -228,20 +226,17 @@
                 
                 const lineWithoutDate = line.replace(/\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2}/, '');
                 
-                // --- Serial extraction (Look for common prefixes or long alphanumeric strings) ---
                 let serialStr = "";
-                // 1. Look for explicit prefixes like 券號, 序號, CODE
                 const serialMatch = lineWithoutDate.match(/(?:券號|券號：|序號|CODE|Code|密碼|PIN)[:：\s]*([A-Za-z0-9\-\s]{8,})/i);
                 if (serialMatch && serialMatch[1]) {
-                    serialStr = serialMatch[1].trim().replace(/\s/g, ''); // Remove spaces
+                    serialStr = serialMatch[1].trim().replace(/\s/g, ''); 
                 } else {
-                    // 2. Look for long generic alphanumeric strings (9-30 chars)
                     const potentialCodes = lineWithoutDate.match(/[A-Za-z0-9]{9,30}/g);
                     if (potentialCodes) {
                          const validCodes = potentialCodes.filter(code => 
-                            !/^20\d{6}$/.test(code) && // Avoid simple 8-digit years
-                            !/^\d{9,15}$/.test(code) && // Avoid long purely numeric timestamps/prices 
-                            (code.match(/[A-Za-z]/) || code.includes('-')) // Must have letters or hyphens to be likely a code
+                            !/^20\d{6}$/.test(code) && 
+                            !/^\d{9,15}$/.test(code) && 
+                            (code.match(/[A-Za-z]/) || code.includes('-')) 
                          );
                          if (validCodes.length > 0) {
                              serialStr = validCodes[0];
@@ -249,7 +244,6 @@
                     }
                 }
                 
-                // --- Ticket Creation Logic ---
                 if (serialStr) {
                     foundAny = true;
                     
@@ -259,73 +253,56 @@
                     } else if (currentNameCandidate) {
                         finalName = currentNameCandidate;
                     } else {
-                         // Fallback: use previous line as name if it seems like content
                          if (index > 0 && cleanLine(lines[index-1]).length > 2 && !lines[index-1].includes("期限") && !lines[index-1].includes("狀態")) {
                              finalName = cleanLine(lines[index-1]);
                          }
                     }
 
-                    // 1. 如果有訂購人，將訂購人加入備注
                     let note = "";
                     if (currentOrderer) {
                         note = `訂購人: ${currentOrderer}`;
-                        currentOrderer = ""; // 清除訂購人，防止它被用於下一張不相關的票券
+                        currentOrderer = ""; 
                     }
 
                     results.push({
-                        id: 'task_' + Date.now() + '_' + index + '_' + Math.random().toString(36).substr(2,5), // New ID generation inside batch logic
+                        id: 'task_' + Date.now() + '_' + index + '_' + Math.random().toString(36).substr(2,5),
                         text: rawLine,
                         originalRaw: rawLine,
                         isTicket: true,
                         serial: serialStr,
                         productName: finalName,
-                        expiry: dateStr, // Use date extracted from current line
+                        expiry: dateStr, 
                         tag: overrideTag || 'default',
                         images: overrideImages || [],
                         image: (overrideImages && overrideImages.length > 0) ? overrideImages[0] : '',
                         completed: false,
                         isDeleted: false,
                         createdAt: Date.now(),
-                        note: note, // 加入訂購人備註
+                        note: note,
                         url: '',
                     });
                     
-                    // Clear name candidate if a ticket was created, as the next name should be for the next ticket.
                     currentNameCandidate = ""; 
                     
                 } else if (dateStr) {
-                    // If it's a date line but no serial, check the *previous* ticket and see if we can assign the date.
                     if (results.length > 0) {
                         const lastResult = results[results.length - 1];
-                        // Only update if the previous result doesn't already have an expiry date
                         if (!lastResult.expiry) {
                             lastResult.expiry = dateStr;
-                        } else {
-                             // 如果已有日期，但這行有新的訂購人，則將訂購人備註加到最後一筆票券
-                             if(currentOrderer) {
-                                 const ordererNote = `訂購人: ${currentOrderer}`;
-                                 lastResult.note = lastResult.note ? `${lastResult.note}\n${ordererNote}` : ordererNote;
-                                 currentOrderer = "";
-                             }
                         }
                     }
-                
                 } else {
-                    // It's not a serial line, not a date line. It might be a name candidate.
-                    // Only update name candidate if the line is likely descriptive text.
                     if (line.length > 2 && !line.includes('單價') && !line.includes('說明') && !line.includes('狀態') && !line.includes('兌換期限') && !line.includes('訂購人')) {
                         currentNameCandidate = line;
                     }
                 }
             });
 
-            // Fallback for single item or if no serials were found at all
             if (!foundAny && text.trim()) {
                 const singleResult = parseTicketInfoV1(text);
                 const finalImages = (overrideImages && overrideImages.length > 0) ? overrideImages : [];
                 const finalImage = finalImages.length > 0 ? finalImages[0] : '';
                 
-                // 1. 如果是單一模式，也嘗試提取訂購人
                 let fallbackNote = "";
                 const ordererMatch = text.match(/(?:訂購人|購買者)[:：\s]*([^,.\s\u0020]+)/i);
                 if (ordererMatch && ordererMatch[1]) {
@@ -343,7 +320,7 @@
                         completed: false,
                         isDeleted: false,
                         createdAt: Date.now(),
-                        note: fallbackNote, // 添加備註
+                        note: fallbackNote,
                         url: '',
                      });
                 } else if (finalImages.length > 0) {
@@ -361,7 +338,7 @@
                         completed: false,
                         isDeleted: false,
                         createdAt: Date.now(),
-                        note: fallbackNote, // 添加備註
+                        note: fallbackNote,
                         url: '',
                      });
                 }
@@ -705,7 +682,6 @@
             const [isEditing, setIsEditing] = useState(false);
             const [showRaw, setShowRaw] = useState(false);
             
-            // 4. 多選時自動將有開啟的qrcode關閉
             useEffect(() => {
                 if (isSelectionMode && showCodes) {
                     setShowCodes(false);
@@ -1160,12 +1136,8 @@
         const AddTaskModal = ({ isOpen, onClose, onAddBatch, tags, onManageTags, gallery, onAddToGallery, presetNames, onManagePresets }) => {
             const [mode, setMode] = useState('paste');
             const [pasteVal, setPasteVal] = useState('');
-            
-            // Batch Override Settings for Paste Mode
             const [batchName, setBatchName] = useState('');
             const [batchTag, setBatchTag] = useState('default');
-            // Reusing pendingImages for both modes, acting as "Batch Images" in paste mode
-            
             const [manualName, setManualName] = useState('');
             const [manualSerial, setManualSerial] = useState('');
             const [manualExpiry, setManualExpiry] = useState('');
@@ -1173,11 +1145,8 @@
             const [manualNote, setManualNote] = useState('');
             const [manualUrl, setManualUrl] = useState('');
             const [manualTag, setManualTag] = useState('default');
-            
-            // Images State
             const [pendingImages, setPendingImages] = useState([]);
             const [pendingMainImage, setPendingMainImage] = useState('');
-
             const [urlInput, setUrlInput] = useState('');
             const [showGallery, setShowGallery] = useState(false);
             const fileInputRef = useRef(null);
@@ -1238,22 +1207,17 @@
                 }
 
                 if (mode === 'paste') {
-                    // Use new batch parser
                     const parsedItems = parseBatchTicketInfo(pasteVal, batchName, batchTag, pendingImages);
-                    
                     parsedItems.forEach((item, idx) => {
-                        // IDs are now generated inside parseBatchTicketInfo
                         results.push({
                             ...item,
                             createdAt: createdTimestamp,
                         });
                     });
                 } else {
-                    // Manual mode logic
                     const fmtExpiry = manualExpiry.replace(/-/g, '/');
                     const finalImages = pendingImages || [];
                     const finalMainImage = pendingMainImage || (finalImages.length > 0 ? finalImages[0] : '');
-                    
                     results.push({ 
                         id: 'task_' + now + '_' + Math.random().toString(36).substr(2,9), 
                         text: manualName, 
@@ -1278,7 +1242,6 @@
             };
 
             const handleAnalyzeToManual = () => {
-                // Legacy: Move first detected item to manual fields
                 const parsed = parseTicketInfoV1(pasteVal);
                 setManualName(parsed.productName || '');
                 setManualSerial(parsed.serial || '');
@@ -1441,7 +1404,7 @@
                             </div>
                         )}
 
-                        {/* Image Section (Shared) */}
+                        {/* Image Section */}
                         <div className="mt-4 pt-3 border-t dark:border-slate-700">
                              <div className="flex gap-2 justify-center mb-2 overflow-x-auto no-scrollbar">
                                 <button onClick={()=>fileInputRef.current.click()} className="flex items-center gap-1 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-slate-600 dark:text-slate-300 text-sm font-medium hover:bg-slate-200 whitespace-nowrap"><ImageIcon size={16}/> 上傳</button>
@@ -1589,7 +1552,6 @@
                 else { alert("❌ 複製失敗。請嘗試手動選取文字或改用「下載檔案」功能。"); }
             };
 
-            // 調整為全匯出 (JSON) 的功能
             const handleFullDownload = () => {
                 onFullExport(tasks);
             };
@@ -1786,13 +1748,11 @@
             const [presetNames, setPresetNames] = useState([]); 
             const [loading, setLoading] = useState(false);
             
-            // Notification Settings
             const [tgToken, setTgToken] = useState('');
             const [tgChatId, setTgChatId] = useState('');
             const [notifyDays, setNotifyDays] = useState(7);
             const [showSettings, setShowSettings] = useState(false);
 
-            // UI States
             const [viewStatus, setViewStatus] = useState('active'); 
             const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('pref_theme') === 'dark');
             const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -1802,14 +1762,12 @@
             const [sortType, setSortType] = useState('expiring');
             const [previewImage, setPreviewImage] = useState(null);
             
-            // Modals & Selection
             const [isSelectionMode, setIsSelectionMode] = useState(false);
             const [selectedTasks, setSelectedTasks] = useState(new Set());
             const [showTagManager, setShowTagManager] = useState(false);
             const [showPresetManager, setShowPresetManager] = useState(false); 
             const [showDataTools, setShowDataTools] = useState(false);
             
-            // NEW: Batch Edit Panel Toggle
             const [showBatchEditPanel, setShowBatchEditPanel] = useState(false);
             
             const menuRef = useRef(null);
@@ -1904,16 +1862,26 @@
                 return duplicates;
             }, [tasks]);
 
-            // 處理排序和過濾，生成平面列表
+            // --- 優化篩選與搜尋 ---
             const filteredTasks = useMemo(() => {
                 let result = [...tasks];
                 if (viewStatus === 'active') result = result.filter(t => !t.completed && !t.isDeleted);
                 else if (viewStatus === 'completed') result = result.filter(t => t.completed && !t.isDeleted);
                 else if (viewStatus === 'deleted') result = result.filter(t => t.isDeleted);
 
+                // 特殊篩選與標籤篩選
                 if (currentTagFilter !== 'all') {
-                    if (currentTagFilter === 'uncategorized') result = result.filter(t => !t.tag || t.tag === 'default');
-                    else result = result.filter(t => t.tag === currentTagFilter);
+                    if (currentTagFilter === 'uncategorized') {
+                        result = result.filter(t => !t.tag || t.tag === 'default');
+                    } else if (currentTagFilter === 'duplicate') {
+                        // 篩選重複項目
+                        result = result.filter(t => duplicateSerials.has(t.serial));
+                    } else if (currentTagFilter === 'no_expiry') {
+                        // 篩選無期限項目
+                        result = result.filter(t => !t.expiry);
+                    } else {
+                        result = result.filter(t => t.tag === currentTagFilter);
+                    }
                 }
 
                 if (searchQuery.trim()) {
@@ -1921,36 +1889,30 @@
                     result = result.filter(t => (t.productName||'').toLowerCase().includes(q) || (t.serial||'').toLowerCase().includes(q) || (t.tag||'').toLowerCase().includes(q));
                 }
                 
-                // 執行排序
                 result.sort((a, b) => {
-                    const isDupA = duplicateSerials.has(a.serial) && a.serial;
-                    const isDupB = duplicateSerials.has(b.serial) && b.serial;
+                    const isDupA = duplicateSerials.has(a.serial);
+                    const isDupB = duplicateSerials.has(b.serial);
                     
-                    // 3. 重複的票券置頂
+                    // 1. 重複的票券移到最上面且相鄰
                     if (isDupA && !isDupB) return -1;
                     if (!isDupA && isDupB) return 1;
 
-                    // 如果都是重複項，按序號分組
+                    // 如果都是重複項，按序號排序讓它們緊鄰
                     if (isDupA && isDupB) {
-                        if (a.serial < b.serial) return -1;
-                        if (a.serial > b.serial) return 1;
-                        // 如果序號相同，則按新增日期排序（最新的在前面）
-                        return (b.createdAt || 0) - (a.createdAt || 0);
+                        return a.serial.localeCompare(b.serial);
                     }
                     
-                    // 非重複項目，按選定的排序方式
                     if (sortType === 'newest') {
-                        return (b.createdAt || 0) - (a.createdAt || 0); // 降序 (最新在最上)
+                        return (b.createdAt || 0) - (a.createdAt || 0);
                     } 
                     
                     if (sortType === 'expiring') {
                         const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); 
                         const dateB = b.expiry ? new Date(b.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
-                        return dateA.getTime() - dateB.getTime(); // 升序 (最早的在前面)
+                        return dateA.getTime() - dateB.getTime(); 
                     } else if (sortType === 'oldest') {
-                         return (a.createdAt || 0) - (b.createdAt || 0); // 升序 (最舊的在前面)
-                    } else { 
-                        // Fallback to expiring
+                         return (a.createdAt || 0) - (b.createdAt || 0); 
+                    } else {
                         const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); 
                         const dateB = b.expiry ? new Date(b.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
                         return dateA.getTime() - dateB.getTime();
@@ -1959,11 +1921,10 @@
                 return result;
             }, [tasks, viewStatus, currentTagFilter, searchQuery, sortType, duplicateSerials]);
 
-            // 1. 每段同時間到期票券自成一個區域
+            // --- 2. 無期限分區優化 ---
             const groupedTasks = useMemo(() => {
                 const groups = new Map();
                 filteredTasks.forEach(task => {
-                    // 2. 無期限票券分組優化
                     const dateKey = task.expiry || 'No Expiry';
                     if (!groups.has(dateKey)) {
                         groups.set(dateKey, []);
@@ -1976,9 +1937,8 @@
                     tasks,
                 }));
 
-                // 排序分組: 優先過期日期 (最早->最晚)，然後是 "No Expiry"
+                // 排序分組: 無期限放最後
                 groupArray.sort((a, b) => {
-                    // 處理重複項目分組的特殊排序，確保它們保持在最頂部 (通過 filteredTasks 的排序已達成，這裡只需處理過期日期的分組鍵排序)
                     const dateA = a.date === 'No Expiry' ? '9999/12/31' : a.date;
                     const dateB = b.date === 'No Expiry' ? '9999/12/31' : b.date;
                     return new Date(dateA) - new Date(dateB);
@@ -1987,8 +1947,6 @@
                 return groupArray;
             }, [filteredTasks]);
 
-
-            // 2. 匯出功能 (公共方法)
             const handleExportTasks = (tasksToExport) => {
                 if (tasksToExport.length === 0) {
                     alert("沒有選擇任何票券進行匯出。");
@@ -2006,13 +1964,11 @@
             const handleExportSelected = () => {
                 const tasksToExport = tasks.filter(t => selectedTasks.has(t.id));
                 handleExportTasks(tasksToExport);
-                // 匯出後結束多選模式
                 setIsSelectionMode(false); 
                 setSelectedTasks(new Set());
                 setShowBatchEditPanel(false);
             };
 
-            // Handlers
             const handleBatchAdd = (newTasks) => {
                 setTasks(prev => [...newTasks, ...prev]);
                 setViewStatus('active');
@@ -2046,7 +2002,6 @@
                 }
             };
             
-            // 4. 批量修改時，修改單項後不跳出選取模式
             const handleBatchUpdateName = (name) => {
                 setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, productName: name } : t));
             };
@@ -2098,7 +2053,7 @@
                         <div className="max-w-3xl mx-auto px-4 py-3">
                             <div className="flex justify-between items-center mb-3">
                                 <h1 className="font-extrabold text-lg text-slate-800 dark:text-white flex items-center gap-2">
-                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.6.2</span>
+                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.7</span>
                                 </h1>
                                 <div className="flex items-center gap-3">
                                     <button onClick={()=>setIsDarkMode(!isDarkMode)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
@@ -2130,6 +2085,13 @@
                         <div className="mb-4">
                             <div className="flex gap-2 overflow-x-auto no-scrollbar items-center pb-1">
                                 <button onClick={() => setCurrentTagFilter('all')} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap border transition-colors ${currentTagFilter === 'all' ? 'bg-slate-800 text-white border-slate-800 dark:bg-slate-200 dark:text-slate-900' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>全部</button>
+                                {/* 3. 新增特殊篩選項目 */}
+                                <button onClick={() => setCurrentTagFilter('duplicate')} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1 border transition-colors ${currentTagFilter === 'duplicate' ? 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
+                                    <CopyPlus size={10} /> 重複項目
+                                </button>
+                                <button onClick={() => setCurrentTagFilter('no_expiry')} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1 border transition-colors ${currentTagFilter === 'no_expiry' ? 'bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
+                                    <CalendarX2 size={10} /> 無期限
+                                </button>
                                 {tags.map(tag => (
                                     <button key={tag} onClick={() => setCurrentTagFilter(tag)} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1 border transition-colors ${currentTagFilter === tag ? 'bg-blue-600 text-white border-blue-600' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
                                         <Tag size={10} /> {tag}
@@ -2205,16 +2167,17 @@
                             </div>
                         ) : (
                             <div className="space-y-4">
-                                {/* 1. 票券依期限分組渲染 */}
                                 {groupedTasks.map((group, groupIndex) => (
                                     <div 
                                         key={group.date} 
                                         className={`rounded-xl shadow-md overflow-hidden p-3 transition-colors duration-300 
-                                            ${groupIndex % 2 === 0 ? 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700' : 'bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50'}`}
+                                            ${group.date === 'No Expiry' 
+                                                ? 'bg-orange-50/50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-800/30 mt-8' 
+                                                : (groupIndex % 2 === 0 ? 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700' : 'bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50')
+                                            }`}
                                     >
-                                        <h4 className={`text-sm font-black mb-3 px-1 flex items-center gap-2 ${group.date === 'No Expiry' ? 'text-slate-500 dark:text-slate-400' : 'text-blue-600 dark:text-blue-400'}`}>
-                                            <Calendar size={14} className={group.date === 'No Expiry' ? 'text-slate-400' : 'text-blue-500'}/>
-                                            {/* 2. 顯示修正後的無期限分組標題 */}
+                                        <h4 className={`text-sm font-black mb-3 px-1 flex items-center gap-2 ${group.date === 'No Expiry' ? 'text-orange-600 dark:text-orange-400' : 'text-blue-600 dark:text-blue-400'}`}>
+                                            {group.date === 'No Expiry' ? <CalendarX2 size={16}/> : <Calendar size={14}/>}
                                             {group.date === 'No Expiry' ? '📅 永久/無期限票券' : `⏳ 期限：${group.date}`}
                                         </h4>
                                         <div className="space-y-1">
