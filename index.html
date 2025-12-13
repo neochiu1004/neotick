@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V2.7 篩選優化版)</title>
+    <title>離線票券管家 (V2.8.2 穩定修復版)</title>
     
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -28,13 +28,13 @@
 
     <script>
         tailwind.config = {
-            darkMode: 'class', // 啟用手動切換深色模式
+            darkMode: 'class',
             theme: {
                 extend: {
                     colors: {
                         primary: '#2563EB',
-                        darkBg: '#0f172a', // slate-900
-                        darkCard: '#1e293b', // slate-800
+                        darkBg: '#0f172a',
+                        darkCard: '#1e293b',
                     },
                     animation: {
                         'pulse-red': 'pulse-red 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
@@ -63,10 +63,8 @@
         .animate-in { animation: fadeIn 0.3s ease-out forwards; }
         canvas { max-width: 100%; height: auto; }
 
-        /* --- Ticket Shape CSS --- */
         .ticket-card {
             position: relative;
-            /* 預設變數，會在 JS 中根據深色模式切換 */
             --card-bg: #ffffff; 
             background: radial-gradient(circle at 0 2.5rem, transparent 0.75rem, var(--card-bg) 0.76rem) top left,
                         radial-gradient(circle at 100% 2.5rem, transparent 0.75rem, var(--card-bg) 0.76rem) top right;
@@ -76,21 +74,20 @@
         }
 
         .dark .ticket-card {
-            --card-bg: #1e293b; /* slate-800 */
+            --card-bg: #1e293b; 
             filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
         }
         
         .ticket-divider {
-            border-top: 2px dashed #cbd5e1; /* slate-300 */
-            margin: 0.5rem -1rem; /* Extend to edges */
+            border-top: 2px dashed #cbd5e1;
+            margin: 0.5rem -1rem; 
             position: relative;
             opacity: 0.6;
         }
         .dark .ticket-divider {
-            border-color: #475569; /* slate-600 */
+            border-color: #475569;
         }
         
-        /* 浮水印 */
         .watermark-used {
             position: absolute;
             top: 50%;
@@ -110,12 +107,6 @@
             color: rgba(255,255,255,0.05);
             border-color: rgba(255,255,255,0.05);
         }
-        
-        /* Batch Edit Panel Animation */
-        .batch-panel-enter { transform: translateY(100%); opacity: 0; }
-        .batch-panel-enter-active { transform: translateY(0); opacity: 1; transition: all 0.3s cubic-bezier(0,0,0.2,1); }
-        .batch-panel-exit { transform: translateY(0); opacity: 1; }
-        .batch-panel-exit-active { transform: translateY(100%); opacity: 0; transition: all 0.2s cubic-bezier(0.4,0,1,1); }
     </style>
 </head>
 <body class="bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-100 transition-colors duration-300">
@@ -129,12 +120,12 @@
             Trash2, Calendar, Check, Plus, LogIn, ExternalLink, Tag, RotateCcw, 
             CheckCircle2, ListTodo, Clock, StickyNote, Save, X, ScanBarcode, 
             Pencil, ClipboardPaste, ArrowRightLeft, Copy, CheckSquare, Trash, 
-            RefreshCcw, Search, FolderPlus, AlertCircle, MoreVertical, Copy as CopyIcon, Link as LinkIcon,
+            RefreshCcw, Search, FolderPlus, AlertCircle, MoreVertical, Link as LinkIcon,
             Image as ImageIcon, Upload, Clipboard, ClipboardList, AlertTriangle, Download, FileJson, Database, FolderInput,
             LayoutDashboard, Moon, Sun, ChevronUp, ChevronDown, Filter, AlertOctagon, CheckSquare as CheckSquareIcon,
             Bell, BellRing, Send, UserCheck, CloudCog, Maximize2, Wand2, WifiOff, FileUp, Replace, FilePlus2, RefreshCw,
             ImagePlus, Heart, HeartHandshake, Eye, EyeOff, Globe, BookOpen, Star, History, MousePointerClick, Layers,
-            CalendarX2, CopyPlus
+            Ban // Using Ban instead of CalendarX to avoid crashes
         } from 'lucide-react';
 
         // --- Helpers ---
@@ -153,60 +144,39 @@
                     canvas.width = width; canvas.height = height;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
-                    try {
-                        resolve(canvas.toDataURL('image/jpeg', 0.6));
-                    } catch (e) {
-                        reject(new Error("Canvas tainted"));
-                    }
+                    try { resolve(canvas.toDataURL('image/jpeg', 0.6)); } catch (e) { reject(new Error("Canvas tainted")); }
                 };
                 img.onerror = (err) => reject(err);
-                
-                if (typeof fileOrUrl === 'string') {
-                    img.src = fileOrUrl;
-                } else {
-                    const reader = new FileReader();
-                    reader.onload = (e) => { img.src = e.target.result; };
-                    reader.readAsDataURL(fileOrUrl);
-                }
+                if (typeof fileOrUrl === 'string') img.src = fileOrUrl;
+                else { const reader = new FileReader(); reader.onload = (e) => { img.src = e.target.result; }; reader.readAsDataURL(fileOrUrl); }
             });
         };
 
         const getClipboardImage = async () => {
             try {
-                if (!navigator.clipboard || !navigator.clipboard.read) {
-                    alert("您的瀏覽器不支援讀取剪貼簿圖片功能，或網站未在安全環境(HTTPS/Localhost)下執行。");
-                    return null;
-                }
+                if (!navigator.clipboard || !navigator.clipboard.read) { alert("瀏覽器不支援讀取剪貼簿圖片"); return null; }
                 const items = await navigator.clipboard.read();
                 for (const item of items) {
                     const imageType = item.types.find(type => type.startsWith('image/'));
-                    if (imageType) {
-                        const blob = await item.getType(imageType);
-                        return await compressImage(blob);
-                    }
+                    if (imageType) { const blob = await item.getType(imageType); return await compressImage(blob); }
                 }
-                alert("剪貼簿中沒有偵測到圖片。");
                 return null;
-            } catch (err) {
-                console.error("Clipboard read error:", err);
-                return null;
-            }
+            } catch (err) { console.error("Clipboard error:", err); return null; }
         };
 
         const sendTelegramMessage = async (token, chatId, text) => {
             if (!token || !chatId || !text) return false;
             const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(text)}&parse_mode=Markdown`;
-            try { await fetch(url, { mode: 'no-cors' }); return true; } catch (error) { console.error("TG Send Error:", error); return false; }
+            try { await fetch(url, { mode: 'no-cors' }); return true; } catch (error) { return false; }
         };
 
-        // --- 智慧辨識邏輯 ---
-        const parseBatchTicketInfo = (text, overrideName, overrideTag, overrideImages) => {
+        // --- Ticket Parsers ---
+        const parseBatchTicketInfo = (text, overrideName, overrideTags, overrideImages) => {
             const results = [];
             const lines = text.split(/\r?\n/);
             let currentNameCandidate = "";
-            let foundAny = false;
-            let currentOrderer = ""; 
-
+            let currentOrderer = "";
+            
             const cleanLine = (l) => l.trim();
 
             lines.forEach((rawLine, index) => {
@@ -220,161 +190,86 @@
 
                 let dateStr = "";
                 const dateMatch = line.match(/\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2}/);
-                if (dateMatch) {
-                    dateStr = dateMatch[0].replace(/[\.\-]/g, '/');
-                }
+                if (dateMatch) dateStr = dateMatch[0].replace(/[\.\-]/g, '/');
                 
                 const lineWithoutDate = line.replace(/\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2}/, '');
-                
                 let serialStr = "";
                 const serialMatch = lineWithoutDate.match(/(?:券號|券號：|序號|CODE|Code|密碼|PIN)[:：\s]*([A-Za-z0-9\-\s]{8,})/i);
-                if (serialMatch && serialMatch[1]) {
-                    serialStr = serialMatch[1].trim().replace(/\s/g, ''); 
-                } else {
+                
+                if (serialMatch && serialMatch[1]) serialStr = serialMatch[1].trim().replace(/\s/g, ''); 
+                else {
                     const potentialCodes = lineWithoutDate.match(/[A-Za-z0-9]{9,30}/g);
                     if (potentialCodes) {
-                         const validCodes = potentialCodes.filter(code => 
-                            !/^20\d{6}$/.test(code) && 
-                            !/^\d{9,15}$/.test(code) && 
-                            (code.match(/[A-Za-z]/) || code.includes('-')) 
-                         );
-                         if (validCodes.length > 0) {
-                             serialStr = validCodes[0];
-                         }
+                         const validCodes = potentialCodes.filter(code => !/^20\d{6}$/.test(code) && !/^\d{9,15}$/.test(code) && (code.match(/[A-Za-z]/) || code.includes('-')));
+                         if (validCodes.length > 0) serialStr = validCodes[0];
                     }
                 }
                 
                 if (serialStr) {
-                    foundAny = true;
-                    
                     let finalName = "未命名票券";
-                    if (overrideName && overrideName.trim()) {
-                        finalName = overrideName.trim();
-                    } else if (currentNameCandidate) {
-                        finalName = currentNameCandidate;
-                    } else {
-                         if (index > 0 && cleanLine(lines[index-1]).length > 2 && !lines[index-1].includes("期限") && !lines[index-1].includes("狀態")) {
-                             finalName = cleanLine(lines[index-1]);
-                         }
-                    }
+                    if (overrideName && overrideName.trim()) finalName = overrideName.trim();
+                    else if (currentNameCandidate) finalName = currentNameCandidate;
+                    else if (index > 0 && cleanLine(lines[index-1]).length > 2 && !lines[index-1].includes("期限")) finalName = cleanLine(lines[index-1]);
 
                     let note = "";
-                    if (currentOrderer) {
-                        note = `訂購人: ${currentOrderer}`;
-                        currentOrderer = ""; 
-                    }
+                    if (currentOrderer) { note = `訂購人: ${currentOrderer}`; currentOrderer = ""; }
 
                     results.push({
                         id: 'task_' + Date.now() + '_' + index + '_' + Math.random().toString(36).substr(2,5),
-                        text: rawLine,
-                        originalRaw: rawLine,
-                        isTicket: true,
-                        serial: serialStr,
-                        productName: finalName,
-                        expiry: dateStr, 
-                        tag: overrideTag || 'default',
-                        images: overrideImages || [],
-                        image: (overrideImages && overrideImages.length > 0) ? overrideImages[0] : '',
-                        completed: false,
-                        isDeleted: false,
-                        createdAt: Date.now(),
-                        note: note,
-                        url: '',
+                        text: rawLine, originalRaw: rawLine, isTicket: true, serial: serialStr, productName: finalName, expiry: dateStr,
+                        tags: overrideTags || [], // Multi-tag support
+                        images: overrideImages || [], image: (overrideImages && overrideImages.length > 0) ? overrideImages[0] : '',
+                        completed: false, isDeleted: false, createdAt: Date.now(), note: note, url: '',
                     });
-                    
                     currentNameCandidate = ""; 
-                    
-                } else if (dateStr) {
-                    if (results.length > 0) {
-                        const lastResult = results[results.length - 1];
-                        if (!lastResult.expiry) {
-                            lastResult.expiry = dateStr;
-                        }
-                    }
+                } else if (dateStr && results.length > 0) {
+                    const lastResult = results[results.length - 1];
+                    if (!lastResult.expiry) lastResult.expiry = dateStr;
                 } else {
-                    if (line.length > 2 && !line.includes('單價') && !line.includes('說明') && !line.includes('狀態') && !line.includes('兌換期限') && !line.includes('訂購人')) {
-                        currentNameCandidate = line;
-                    }
+                    if (line.length > 2 && !line.includes('單價') && !line.includes('說明') && !line.includes('狀態') && !line.includes('期限') && !line.includes('訂購人')) currentNameCandidate = line;
                 }
             });
 
-            if (!foundAny && text.trim()) {
+            if (results.length === 0 && text.trim()) {
                 const singleResult = parseTicketInfoV1(text);
-                const finalImages = (overrideImages && overrideImages.length > 0) ? overrideImages : [];
-                const finalImage = finalImages.length > 0 ? finalImages[0] : '';
-                
                 let fallbackNote = "";
                 const ordererMatch = text.match(/(?:訂購人|購買者)[:：\s]*([^,.\s\u0020]+)/i);
-                if (ordererMatch && ordererMatch[1]) {
-                    fallbackNote = `訂購人: ${ordererMatch[1].trim()}`;
-                }
+                if (ordererMatch && ordererMatch[1]) fallbackNote = `訂購人: ${ordererMatch[1].trim()}`;
 
-                if (singleResult.isTicket || singleResult.productName !== "未命名票券") {
+                if (singleResult.isTicket || singleResult.productName !== "未命名票券" || (overrideImages && overrideImages.length > 0)) {
                      results.push({
                         ...singleResult,
                         id: 'task_' + Date.now() + '_' + Math.random().toString(36).substr(2,9),
                         productName: (overrideName && overrideName.trim()) ? overrideName.trim() : singleResult.productName,
-                        tag: overrideTag || 'default',
-                        images: finalImages,
-                        image: finalImage,
-                        completed: false,
-                        isDeleted: false,
-                        createdAt: Date.now(),
-                        note: fallbackNote,
-                        url: '',
-                     });
-                } else if (finalImages.length > 0) {
-                     results.push({
-                        id: 'task_' + Date.now() + '_' + Math.random().toString(36).substr(2,9),
-                        text: text,
-                        originalRaw: text,
-                        isTicket: true,
-                        serial: '',
-                        productName: overrideName || "圖片票券",
-                        expiry: '',
-                        tag: overrideTag || 'default',
-                        images: finalImages,
-                        image: finalImage,
-                        completed: false,
-                        isDeleted: false,
-                        createdAt: Date.now(),
-                        note: fallbackNote,
-                        url: '',
+                        tags: overrideTags || [],
+                        images: overrideImages || [],
+                        image: (overrideImages && overrideImages.length > 0) ? overrideImages[0] : '',
+                        completed: false, isDeleted: false, createdAt: Date.now(), note: fallbackNote, url: '',
                      });
                 }
             }
-
             return results;
         };
 
         const parseTicketInfoV1 = (text) => {
             const result = { isTicket: false, serial: '', productName: '', expiry: '', originalText: text };
             const serialMatch = text.match(/(?:票券序號|序號|CODE|Code|密碼|PIN|券號)[:：\s]*([A-Za-z0-9\-\s]{8,})/i);
-            if (serialMatch) { 
-                const candidate = serialMatch[1].trim().replace(/\s/g, '');
-                if (candidate.length > 8 && !candidate.startsWith('202') && !candidate.includes('/')) { 
-                    result.isTicket = true; result.serial = candidate;
-                }
-            } 
-            if (!result.serial) {
+            if (serialMatch) { result.isTicket = true; result.serial = serialMatch[1].trim().replace(/\s/g, ''); } 
+            else {
                 const potentialCodes = text.match(/\b[A-Za-z0-9\-]{9,30}\b/g);
                 if (potentialCodes) {
-                    const validCodes = potentialCodes.filter(code => code.length > 8 && !code.startsWith('202') && !code.includes('/') && !/^19\d{6}$/.test(code));
-                    if (validCodes.length > 0) {
-                        result.isTicket = true;
-                        result.serial = validCodes.find(code => (code.match(/[A-Za-z]/) && code.match(/[0-9]/)) || code.includes('-')) || validCodes[0];
-                    }
+                    const validCodes = potentialCodes.filter(code => code.length > 8 && !code.startsWith('202') && !code.includes('/'));
+                    if (validCodes.length > 0) { result.isTicket = true; result.serial = validCodes[0]; }
                 }
             }
             const dateMatches = text.match(/(\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2})/g);
-            if (dateMatches && dateMatches.length > 0) result.expiry = dateMatches[dateMatches.length - 1].replace(/[\.\-]/g, '/');
+            if (dateMatches) result.expiry = dateMatches[dateMatches.length - 1].replace(/[\.\-]/g, '/');
             
             const nameMatch = text.match(/【(.*?)】/);
-            if (nameMatch) { result.productName = nameMatch[1]; } 
+            if (nameMatch) result.productName = nameMatch[1]; 
             else if (result.isTicket || text.length > 0) {
                 const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-                const likelyName = lines.find(l => l.length > 2 && l.length < 30 && !l.includes('序號') && !l.includes('期限') && (!result.serial || !l.includes(result.serial)) && !l.match(/^\d{4}/));
-                result.productName = likelyName || (lines[0] || "未命名票券");
+                result.productName = lines.find(l => l.length > 2 && !l.includes('序號') && !l.includes('期限')) || "未命名票券";
             }
             if (!result.productName) result.productName = "未命名票券";
             return result;
@@ -382,23 +277,16 @@
 
         const checkIsExpiringSoon = (expiryStr, thresholdDays) => {
             if (!expiryStr) return false;
-            const normalizedDate = expiryStr.replace(/[\.\-]/g, '/');
-            const expiryDate = new Date(normalizedDate);
-            if (isNaN(expiryDate.getTime())) return false;
-            const today = new Date(); today.setHours(0, 0, 0, 0);
-            const diffTime = expiryDate - today;
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            return diffDays <= thresholdDays; 
+            const diffDays = getDaysRemaining(expiryStr);
+            return diffDays <= thresholdDays && diffDays >= 0; 
         };
 
         const getDaysRemaining = (expiryStr) => {
             if (!expiryStr) return 999;
-            const normalizedDate = expiryStr.replace(/[\.\-]/g, '/');
-            const expiryDate = new Date(normalizedDate);
+            const expiryDate = new Date(expiryStr.replace(/[\.\-]/g, '/'));
             if (isNaN(expiryDate.getTime())) return 999;
             const today = new Date(); today.setHours(0, 0, 0, 0);
-            const diffTime = expiryDate - today;
-            return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            return Math.ceil((expiryDate - today) / (1000 * 60 * 60 * 24));
         };
 
         const getTagColorClass = (tag, isDark) => {
@@ -420,15 +308,13 @@
             if (!text) return false;
             try { await navigator.clipboard.writeText(text); return true; } 
             catch (err) {
-                try {
-                    const textArea = document.createElement("textarea"); textArea.value = text;
-                    textArea.style.position = "fixed"; document.body.appendChild(textArea); textArea.focus(); textArea.select();
-                    const successful = document.execCommand('copy'); document.body.removeChild(textArea); return successful;
-                } catch (fallbackErr) { return false; }
+                const textArea = document.createElement("textarea"); textArea.value = text;
+                textArea.style.position = "fixed"; document.body.appendChild(textArea); textArea.focus(); textArea.select();
+                const successful = document.execCommand('copy'); document.body.removeChild(textArea); return successful;
             }
         };
 
-        // --- Components ---
+        // --- Common Components ---
         const QRCodeCanvas = ({ text, size = 150 }) => {
             const canvasRef = useRef(null);
             useEffect(() => { if (canvasRef.current && window.QRious) new window.QRious({ element: canvasRef.current, value: text, size: size, level: 'H' }); }, [text, size]);
@@ -441,7 +327,7 @@
             return <div className="flex flex-col items-center w-full p-2 bg-white rounded-lg border shadow-sm"><span className="text-[10px] text-gray-400 mb-1 uppercase tracking-wider">Barcode</span><canvas ref={canvasRef} className="max-w-full h-auto" /></div>;
         };
         
-        const ImagePreviewModal = ({ src, onClose, allImages }) => {
+        const ImagePreviewModal = ({ src, onClose }) => {
             if (!src) return null;
             return (
                 <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
@@ -451,252 +337,114 @@
             );
         };
 
-        const RawDataModal = ({ content, onClose }) => {
-            if (!content && content !== "") return null;
-            return (
-                <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
-                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-slate-200 dark:border-slate-700 relative flex flex-col max-h-[80vh]" onClick={e=>e.stopPropagation()}>
-                        <div className="flex justify-between items-center mb-4">
-                            <h3 className="font-bold text-lg dark:text-white flex items-center gap-2"><Eye size={20}/> 原始資料查看</h3>
-                            <button onClick={onClose}><X size={20} className="text-slate-400"/></button>
-                        </div>
-                        <div className="flex-1 overflow-y-auto bg-slate-100 dark:bg-slate-900 p-4 rounded-xl font-mono text-xs whitespace-pre-wrap break-all dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                            {content}
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        const GalleryModal = ({ isOpen, onClose, images, onSelect, onDelete, onAddImage }) => {
-            const fileInputRef = useRef(null);
-            
-            if(!isOpen) return null;
-
-            const handleFileSelect = async (e) => {
-                const file = e.target.files[0];
-                if (file) {
-                    try {
-                        const compressed = await compressImage(file);
-                        onAddImage(compressed);
-                    } catch (err) {
-                        alert("圖片處理失敗");
-                    }
-                }
-            };
-
-            return (
-                <div className="fixed inset-0 z-[80] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
-                    <div className="bg-white dark:bg-slate-800 rounded-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden" onClick={e=>e.stopPropagation()}>
-                        <div className="p-4 border-b dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800">
-                            <div className="flex items-center gap-3">
-                                <h3 className="font-bold text-lg dark:text-white flex items-center gap-2"><ImagePlus size={20} className="text-pink-500"/> 常用圖庫</h3>
-                                <button onClick={() => fileInputRef.current.click()} className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-lg font-bold hover:bg-blue-200 flex items-center gap-1">
-                                    <Plus size={14}/> 上傳圖片
-                                </button>
-                                <input type="file" hidden ref={fileInputRef} accept="image/*" onChange={handleFileSelect}/>
-                            </div>
-                            <button onClick={onClose}><X size={20} className="text-slate-400"/></button>
-                        </div>
-                        <div className="p-4 overflow-y-auto flex-1 bg-slate-100 dark:bg-slate-900/50">
-                            {images.length === 0 ? (
-                                <div className="text-center py-10 text-slate-400">
-                                    <ImagePlus size={48} className="mx-auto mb-2 opacity-50"/>
-                                    <p>圖庫是空的</p>
-                                </div>
-                            ) : (
-                                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
-                                    {images.map((img, idx) => (
-                                        <div key={idx} className="relative group aspect-square rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-white cursor-pointer shadow-sm hover:ring-2 hover:ring-blue-500 transition-all" onClick={() => { onSelect(img); onClose(); }}>
-                                            <img src={img} className="w-full h-full object-cover"/>
-                                            <button onClick={(e) => { e.stopPropagation(); onDelete(idx); }} className="absolute top-1 right-1 bg-red-500/80 hover:bg-red-600 text-white p-1 rounded-full backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <Trash2 size={12}/>
-                                            </button>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        const TagManagerModal = ({ isOpen, onClose, tags, onAddTag, onDeleteTag, onRenameTag }) => {
-            const [newTag, setNewTag] = useState('');
-            const [editingTag, setEditingTag] = useState(null); 
-            const [editValue, setEditValue] = useState(''); 
-            if (!isOpen) return null;
-            const startEdit = (tag) => { setEditingTag(tag); setEditValue(tag); };
-            const saveEdit = () => { if (editValue.trim() && editValue !== editingTag) { onRenameTag(editingTag, editValue.trim()); } setEditingTag(null); };
-            
-            return (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4 animate-in">
-                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-slate-100 dark:border-slate-700">
-                        <div className="flex justify-between items-center mb-4"><h2 className="text-lg font-bold flex items-center gap-2 dark:text-white"><FolderPlus size={20} className="text-blue-600 dark:text-blue-400"/> 管理標籤</h2><button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button></div>
-                        <div className="flex gap-2 mb-4"><input type="text" value={newTag} onChange={(e) => setNewTag(e.target.value)} placeholder="新標籤名稱" className="flex-1 px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white" /><button onClick={() => { if(newTag.trim()) { onAddTag(newTag.trim()); setNewTag(''); } }} className="bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700"><Plus size={18}/></button></div>
-                        <div className="max-h-[300px] overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-                            {tags.length === 0 ? <p className="text-slate-400 text-sm text-center py-8">尚無自訂標籤</p> : tags.map(tag => (
-                                <div key={tag} className="flex justify-between items-center bg-slate-50 dark:bg-slate-700/50 p-2.5 rounded-lg border border-slate-100 dark:border-slate-700 group">
-                                    {editingTag === tag ? (
-                                        <div className="flex gap-2 flex-1 items-center"><input type="text" value={editValue} onChange={(e) => setEditValue(e.target.value)} className="flex-1 bg-white dark:bg-slate-600 px-2 py-1 rounded border border-blue-300 outline-none text-sm dark:text-white" autoFocus /><button onClick={saveEdit} className="text-green-600 hover:bg-green-50 p-1 rounded"><Check size={16}/></button><button onClick={() => setEditingTag(null)} className="text-slate-400 hover:bg-slate-100 p-1 rounded"><X size={16}/></button></div>
-                                    ) : (
-                                        <><span className="text-slate-700 dark:text-slate-200 font-medium text-sm pl-1">{tag}</span><div className="flex gap-1"><button onClick={() => startEdit(tag)} className="text-slate-400 hover:text-blue-600 p-1.5 hover:bg-blue-50 dark:hover:bg-slate-600 rounded"><Pencil size={14}/></button><button onClick={() => { if(confirm(`確定刪除標籤「${tag}」嗎？`)) onDeleteTag(tag); }} className="text-slate-400 hover:text-red-600 p-1.5 hover:bg-red-50 dark:hover:bg-slate-600 rounded"><Trash2 size={14}/></button></div></>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        const PresetManagerModal = ({ isOpen, onClose, presets, onAddPreset, onDeletePreset }) => {
-            const [newPreset, setNewPreset] = useState('');
-            if (!isOpen) return null;
-            
-            return (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4 animate-in">
-                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-slate-100 dark:border-slate-700">
-                        <div className="flex justify-between items-center mb-4"><h2 className="text-lg font-bold flex items-center gap-2 dark:text-white"><BookOpen size={20} className="text-purple-600 dark:text-purple-400"/> 管理常用品名</h2><button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button></div>
-                        <div className="flex gap-2 mb-4"><input type="text" value={newPreset} onChange={(e) => setNewPreset(e.target.value)} placeholder="輸入品名..." className="flex-1 px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-purple-500 text-sm bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white" /><button onClick={() => { if(newPreset.trim()) { onAddPreset(newPreset.trim()); setNewPreset(''); } }} className="bg-purple-600 text-white px-3 py-2 rounded-lg hover:bg-purple-700"><Plus size={18}/></button></div>
-                        <div className="max-h-[300px] overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-                            {presets.length === 0 ? <p className="text-slate-400 text-sm text-center py-8">尚無常用資料</p> : presets.map(name => (
-                                <div key={name} className="flex justify-between items-center bg-slate-50 dark:bg-slate-700/50 p-2.5 rounded-lg border border-slate-100 dark:border-slate-700 group">
-                                    <span className="text-slate-700 dark:text-slate-200 font-medium text-sm pl-1 truncate">{name}</span>
-                                    <button onClick={() => { if(confirm(`確定刪除「${name}」嗎？`)) onDeletePreset(name); }} className="text-slate-400 hover:text-red-600 p-1.5 hover:bg-red-50 dark:hover:bg-slate-600 rounded"><Trash2 size={14}/></button>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            );
-        };
+        // --- UI Components ---
         
-        // --- Batch Edit Panel Component ---
-        const BatchEditPanel = ({ selectedCount, tags, onUpdateName, onUpdateTag, onUpdateImage, onUpdateDate, onClose, gallery, onAddToGallery, onManageTags, onManagePresets, presetNames }) => {
+        // ** MultiTagInput for Add/Edit/Batch **
+        const MultiTagInput = ({ selectedTags, availableTags, onChange, placeholder = "新增標籤..." }) => {
+            const [input, setInput] = useState('');
+            const handleAdd = (tag) => { const t = tag.trim(); if (t && !selectedTags.includes(t)) { onChange([...selectedTags, t]); } setInput(''); };
+            const handleRemove = (tagToRemove) => { onChange(selectedTags.filter(t => t !== tagToRemove)); };
+            const handleKeyDown = (e) => { if (e.key === 'Enter') { e.preventDefault(); handleAdd(input); } };
+
+            return (
+                <div className="w-full">
+                    <div className="flex flex-wrap gap-1 mb-2">
+                        {selectedTags.map(tag => (
+                            <span key={tag} className="px-2 py-1 rounded-md bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200 text-sm flex items-center gap-1">
+                                {tag} <button onClick={() => handleRemove(tag)} className="hover:text-red-500"><X size={12}/></button>
+                            </span>
+                        ))}
+                    </div>
+                    <div className="flex gap-1 relative">
+                        <input type="text" list="available-tags-list" value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder={placeholder} className="flex-1 bg-slate-50 dark:bg-slate-900 border dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-white outline-none focus:ring-2 focus:ring-blue-500" />
+                        <datalist id="available-tags-list">{availableTags.map(t => <option key={t} value={t} />)}</datalist>
+                        <button onClick={() => handleAdd(input)} className="bg-blue-500 text-white px-3 rounded-lg"><Plus size={18}/></button>
+                    </div>
+                </div>
+            );
+        };
+
+        // ** QuickAddTagModal **
+        const QuickAddTagModal = ({ isOpen, onClose, tags, onAdd }) => {
+            const [newTag, setNewTag] = useState('');
+            if(!isOpen) return null;
+            return (
+                <div className="fixed inset-0 bg-black/50 z-[90] flex items-center justify-center p-4" onClick={onClose}>
+                    <div className="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-xl w-full max-w-xs" onClick={e=>e.stopPropagation()}>
+                        <h3 className="font-bold mb-3 dark:text-white">新增標籤</h3>
+                        <div className="flex gap-2">
+                            <input autoFocus list="quick-tag-list" value={newTag} onChange={e=>setNewTag(e.target.value)} className="flex-1 border rounded px-2 py-1 dark:bg-slate-700 dark:border-slate-600 dark:text-white" placeholder="標籤名稱" />
+                            <datalist id="quick-tag-list">{tags.map(t=><option key={t} value={t}/>)}</datalist>
+                            <button onClick={()=>{ if(newTag.trim()) { onAdd(newTag.trim()); onClose(); } }} className="bg-blue-600 text-white px-3 rounded">OK</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const BatchEditPanel = ({ selectedCount, tags, onUpdateName, onUpdateTags, onUpdateImage, onUpdateDate, onClose, gallery, onAddToGallery, onManageTags, onManagePresets, presetNames }) => {
             const [name, setName] = useState('');
-            const [tag, setTag] = useState('');
             const [expiry, setExpiry] = useState(''); 
+            const [batchTags, setBatchTags] = useState([]);
             const [showGallery, setShowGallery] = useState(false);
             const fileInputRef = useRef(null);
 
             const handleImageUpload = async (e) => {
-                if (e.target.files && e.target.files[0]) {
-                    try {
-                        const img = await compressImage(e.target.files[0]);
-                        onUpdateImage([img]);
-                    } catch(err) { alert('圖片讀取失敗'); }
-                }
+                if (e.target.files && e.target.files[0]) { try { const img = await compressImage(e.target.files[0]); onUpdateImage([img]); } catch(err) { alert('圖片讀取失敗'); } }
             };
             
             return (
                 <div className="fixed bottom-[70px] left-4 right-4 bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 z-50 animate-in p-4 flex flex-col gap-3">
                     <div className="flex justify-between items-center border-b dark:border-slate-700 pb-2">
-                        <h3 className="font-bold text-slate-700 dark:text-white flex items-center gap-2">
-                            <Layers size={18} className="text-blue-600"/> 批量編輯 ({selectedCount} 筆)
-                        </h3>
-                        {/* 4. 批量修改後不會自動退出，手動點擊 X 關閉面板 */}
+                        <h3 className="font-bold text-slate-700 dark:text-white flex items-center gap-2"><Layers size={18} className="text-blue-600"/> 批量編輯 ({selectedCount} 筆)</h3>
                         <button onClick={onClose} className="bg-slate-100 dark:bg-slate-700 rounded-full p-1"><X size={16}/></button>
                     </div>
-                    
-                    {/* 批量修改名稱 (支援名稱庫, 可輸入可選) */}
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
-                            <input 
-                                list="preset-names-batch-edit" // 允許手動輸入或從名稱庫選擇
-                                value={name}
-                                onChange={e=>setName(e.target.value)}
-                                placeholder="統一修改名稱 (可手動輸入或選擇)..."
-                                className="flex-1 bg-slate-50 dark:bg-slate-900 border dark:border-slate-700 rounded-lg px-2 py-1.5 text-sm dark:text-white"
-                            />
-                            <datalist id="preset-names-batch-edit">
-                                {presetNames.map(name => <option key={name} value={name} />)}
-                            </datalist>
-                            <button onClick={onManagePresets} className="px-2 bg-slate-100 dark:bg-slate-700 text-purple-600 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors" title="管理常用品名"><BookOpen size={16}/></button>
+                            <input list="preset-names-batch-edit" value={name} onChange={e=>setName(e.target.value)} placeholder="統一修改名稱..." className="flex-1 bg-slate-50 dark:bg-slate-900 border dark:border-slate-700 rounded-lg px-2 py-1.5 text-sm dark:text-white"/>
+                            <datalist id="preset-names-batch-edit">{presetNames.map(name => <option key={name} value={name} />)}</datalist>
+                            <button onClick={onManagePresets} className="px-2 bg-slate-100 dark:bg-slate-700 text-purple-600 rounded-lg"><BookOpen size={16}/></button>
                             <button onClick={()=>name.trim() && onUpdateName(name)} disabled={!name.trim()} className="bg-blue-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">改名</button>
                         </div>
                     </div>
-                    
-                    {/* 批量修改期限 */}
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
-                            <input 
-                                type="date"
-                                value={expiry}
-                                onChange={e => setExpiry(e.target.value)}
-                                className="flex-1 bg-slate-50 dark:bg-slate-900 border dark:border-slate-700 rounded-lg px-2 py-1.5 text-sm dark:text-white dark:[color-scheme:dark]"
-                            />
+                            <input type="date" value={expiry} onChange={e => setExpiry(e.target.value)} className="flex-1 bg-slate-50 dark:bg-slate-900 border dark:border-slate-700 rounded-lg px-2 py-1.5 text-sm dark:text-white dark:[color-scheme:dark]"/>
                             <button onClick={() => expiry.trim() && onUpdateDate(expiry)} disabled={!expiry.trim()} className="bg-blue-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">改期限</button>
                         </div>
                     </div>
-
-                    {/* 批量修改分類 (可輸入可選) */}
-                    <div className="flex gap-2 items-center">
-                        <div className="flex-1 flex gap-1">
-                            <input 
-                                list="tag-names-batch-edit" // 允許手動輸入或從標籤庫選擇
-                                value={tag}
-                                onChange={e=>setTag(e.target.value)}
-                                placeholder="統一修改分類 (可手動輸入或選擇)..."
-                                className="flex-1 bg-slate-50 dark:bg-slate-900 border dark:border-slate-700 rounded-lg px-2 py-1.5 text-sm dark:text-white"
-                            />
-                            <datalist id="tag-names-batch-edit">
-                                <option value="default">未分類</option>
-                                {tags.map(t=><option key={t} value={t}>{t}</option>)}
-                            </datalist>
-                            <button onClick={onManageTags} className="px-2 bg-slate-100 dark:bg-slate-700 text-blue-600 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors" title="管理標籤"><FolderPlus size={16}/></button>
-                            <button onClick={()=>tag && onUpdateTag(tag)} disabled={!tag} className="bg-blue-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">分類</button>
+                    <div className="border rounded-lg p-2 dark:border-slate-700">
+                        <label className="text-xs text-slate-400 mb-1 block">統一設定標籤 (將覆蓋原有標籤)</label>
+                        <div className="flex gap-1 items-start">
+                            <MultiTagInput selectedTags={batchTags} availableTags={tags} onChange={setBatchTags} placeholder="輸入標籤..." />
+                            <button onClick={()=>onUpdateTags(batchTags)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm whitespace-nowrap mt-1">套用</button>
                         </div>
                     </div>
-                    
-                    {/* 批量圖片 */}
                     <div className="flex gap-2">
-                         <button onClick={()=>fileInputRef.current.click()} className="flex-1 py-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-sm flex items-center justify-center gap-1 hover:bg-slate-200 dark:hover:bg-slate-600">
-                             <Upload size={14}/> 上傳圖片
-                         </button>
-                         <button onClick={()=>setShowGallery(true)} className="flex-1 py-1.5 bg-slate-100 dark:bg-slate-700 text-pink-500 rounded-lg text-sm flex items-center justify-center gap-1 hover:bg-slate-200 dark:hover:bg-slate-600">
-                             <ImagePlus size={14}/> 圖庫圖片
-                         </button>
+                         <button onClick={()=>fileInputRef.current.click()} className="flex-1 py-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-sm flex items-center justify-center gap-1 hover:bg-slate-200 dark:hover:bg-slate-600"><Upload size={14}/> 上傳圖片</button>
+                         <button onClick={()=>setShowGallery(true)} className="flex-1 py-1.5 bg-slate-100 dark:bg-slate-700 text-pink-500 rounded-lg text-sm flex items-center justify-center gap-1 hover:bg-slate-200 dark:hover:bg-slate-600"><ImagePlus size={14}/> 圖庫圖片</button>
                     </div>
-                    
                     <input type="file" ref={fileInputRef} hidden accept="image/*" onChange={handleImageUpload}/>
-                    
-                    {showGallery && (
-                        <GalleryModal 
-                            isOpen={showGallery} 
-                            onClose={()=>setShowGallery(false)} 
-                            images={gallery} 
-                            onSelect={(img)=>onUpdateImage([img])} 
-                            onAddImage={onAddToGallery} 
-                            onDelete={(idx)=> {const newG = [...gallery]; newG.splice(idx,1); onAddToGallery(newG, true);}} 
-                        />
-                    )}
+                    {showGallery && <GalleryModal isOpen={showGallery} onClose={()=>setShowGallery(false)} images={gallery} onSelect={(img)=>onUpdateImage([img])} onAddImage={onAddToGallery} onDelete={(idx)=> {const newG = [...gallery]; newG.splice(idx,1); onAddToGallery(newG, true);}} />}
                 </div>
             );
         };
 
-        const TaskItem = ({ task, tags, onToggle, onDelete, onRestore, onPermanentDelete, onUpdateTicket, isSelectionMode, isSelected, onSelect, expiryThreshold, isDuplicate, isDarkMode, onManageTags, onPreviewImage, gallery, onAddToGallery, presetNames, onManagePresets }) => {
+        const TaskItem = ({ task, tags, onToggle, onDelete, onRestore, onPermanentDelete, onUpdateTicket, isSelectionMode, isSelected, onSelect, expiryThreshold, isDuplicate, isDarkMode, onManageTags, onPreviewImage, gallery, onAddToGallery, presetNames, onManagePresets, onAddTag, onRemoveTag }) => {
             const [showCodes, setShowCodes] = useState(false);
             const [justCopied, setJustCopied] = useState(false);
             const [isEditing, setIsEditing] = useState(false);
             const [showRaw, setShowRaw] = useState(false);
+            const [showQuickAdd, setShowQuickAdd] = useState(false);
             
-            useEffect(() => {
-                if (isSelectionMode && showCodes) {
-                    setShowCodes(false);
-                }
-            }, [isSelectionMode]);
+            useEffect(() => { if (isSelectionMode && showCodes) setShowCodes(false); }, [isSelectionMode]);
 
-            // Edit States
             const [editName, setEditName] = useState(task.productName || task.text || '');
             const [editSerial, setEditSerial] = useState(task.serial || '');
             const [editExpiry, setEditExpiry] = useState(task.expiry || '');
             const [editCreatedAt, setEditCreatedAt] = useState(''); 
             const [editNote, setEditNote] = useState(task.note || '');
-            const [editTag, setEditTag] = useState(task.tag || 'default');
-            
-            // Image Editing (Multiple)
+            const [editTags, setEditTags] = useState(task.tags || []);
             const [editImages, setEditImages] = useState(task.images || (task.image ? [task.image] : []));
             const [editMainImage, setEditMainImage] = useState(task.image || '');
             const [showGallery, setShowGallery] = useState(false);
@@ -705,12 +453,11 @@
             useEffect(() => {
                 if (isEditing) {
                     const d = task.createdAt ? new Date(task.createdAt) : new Date();
-                    const yyyy = d.getFullYear();
-                    const mm = String(d.getMonth() + 1).padStart(2, '0');
-                    const dd = String(d.getDate()).padStart(2, '0');
+                    const yyyy = d.getFullYear(); const mm = String(d.getMonth() + 1).padStart(2, '0'); const dd = String(d.getDate()).padStart(2, '0');
                     setEditCreatedAt(`${yyyy}-${mm}-${dd}`);
                     setEditImages(task.images || (task.image ? [task.image] : []));
                     setEditMainImage(task.image || '');
+                    setEditTags(task.tags || []);
                 }
             }, [isEditing, task]);
 
@@ -718,47 +465,28 @@
             const isDeleted = task.isDeleted;
             const isExpiring = !isCompleted && !isDeleted && task.expiry && checkIsExpiringSoon(task.expiry, expiryThreshold);
             
-            const tagColor = getTagColorClass(task.tag, isDarkMode);
             let cardClasses = `ticket-card w-full mb-3 transition-all duration-300 relative overflow-hidden group `;
-            
             if (isDeleted) cardClasses += 'opacity-70 grayscale ';
             if (isSelected) cardClasses += 'ring-2 ring-blue-500 transform scale-[1.01] ';
-            
-            if (isDuplicate && !isDeleted) {
-                cardClasses += 'border-2 border-red-500 shadow-xl shadow-red-200 dark:shadow-red-900/40 animate-pulse-red z-10 ';
-            } else if (isExpiring && !isDeleted) {
-                cardClasses += 'border border-red-300 shadow-md shadow-red-100 ';
-            }
+            if (isDuplicate && !isDeleted) cardClasses += 'border-2 border-red-500 shadow-xl shadow-red-200 dark:shadow-red-900/40 animate-pulse-red z-10 ';
+            else if (isExpiring && !isDeleted) cardClasses += 'border border-red-300 shadow-md shadow-red-100 ';
 
-            const getDatePickerValue = (dateStr) => {
-                if(!dateStr) return '';
-                return dateStr.replace(/\//g, '-').replace(/\./g, '-');
-            };
+            const getDatePickerValue = (dateStr) => { if(!dateStr) return ''; return dateStr.replace(/\//g, '-').replace(/\./g, '-'); };
 
             const handleCopy = async (e) => {
                 e.stopPropagation();
-                if(task.serial && await copyToClipboard(task.serial)) {
-                    setJustCopied(true); setTimeout(() => setJustCopied(false), 2000);
-                }
+                if(task.serial && await copyToClipboard(task.serial)) { setJustCopied(true); setTimeout(() => setJustCopied(false), 2000); }
             };
 
             const handleSaveEdit = () => {
                 const formattedExpiry = editExpiry.replace(/-/g, '/');
                 let newCreatedAt = task.createdAt;
-                if (editCreatedAt) {
-                    const d = new Date(editCreatedAt);
-                    d.setHours(12,0,0,0); 
-                    newCreatedAt = d.getTime();
-                }
-
+                if (editCreatedAt) { const d = new Date(editCreatedAt); d.setHours(12,0,0,0); newCreatedAt = d.getTime(); }
                 let finalMainImage = editMainImage;
-                if (editImages.length > 0 && !editImages.includes(editMainImage)) {
-                    finalMainImage = editImages[0];
-                } else if (editImages.length === 0) {
-                    finalMainImage = '';
-                }
+                if (editImages.length > 0 && !editImages.includes(editMainImage)) finalMainImage = editImages[0];
+                else if (editImages.length === 0) finalMainImage = '';
 
-                onUpdateTicket(task.id, editName, editSerial, formattedExpiry, finalMainImage, editImages, '', editNote, editTag, newCreatedAt);
+                onUpdateTicket(task.id, editName, editSerial, formattedExpiry, finalMainImage, editImages, '', editNote, editTags, newCreatedAt);
                 setIsEditing(false);
             };
 
@@ -782,10 +510,7 @@
 
             const handlePasteImageEdit = async () => {
                 const img = await getClipboardImage();
-                if (img) {
-                    setEditImages(prev => [...prev, img]);
-                    if (!editMainImage) setEditMainImage(img);
-                }
+                if (img) { setEditImages(prev => [...prev, img]); if (!editMainImage) setEditMainImage(img); }
             };
 
             const handleEditUrlImport = async () => {
@@ -795,60 +520,39 @@
                     setEditImages(prev => [...prev, img]);
                     if (!editMainImage) setEditMainImage(img);
                     setEditUrlInput('');
-                } catch(e) {
-                     window.open(editUrlInput, '_blank');
-                }
+                } catch(e) { window.open(editUrlInput, '_blank'); }
             };
 
             if (isEditing) {
                 return (
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl border-2 border-blue-500 p-4 mb-3 space-y-3 relative z-20 animate-in" onClick={e => e.stopPropagation()}>
                         <h3 className="text-sm font-bold text-blue-500 uppercase">編輯票券</h3>
-                        
                         <div className="flex gap-2 items-end">
                             <div className="flex-1">
                                 <label className="text-xs text-slate-400">品名</label>
-                                <input 
-                                    list={`preset-names-edit-${task.id}`}
-                                    className="w-full bg-slate-50 dark:bg-slate-700 border-b border-slate-200 dark:border-slate-600 p-1 text-lg font-bold outline-none dark:text-white" 
-                                    value={editName} 
-                                    onChange={e=>setEditName(e.target.value)}
-                                    placeholder="輸入或選擇..."
-                                />
-                                <datalist id={`preset-names-edit-${task.id}`}>
-                                    {presetNames.map(name => <option key={name} value={name} />)}
-                                </datalist>
+                                <input list={`preset-names-edit-${task.id}`} className="w-full bg-slate-50 dark:bg-slate-700 border-b border-slate-200 dark:border-slate-600 p-1 text-lg font-bold outline-none dark:text-white" value={editName} onChange={e=>setEditName(e.target.value)} placeholder="輸入或選擇..."/>
+                                <datalist id={`preset-names-edit-${task.id}`}>{presetNames.map(name => <option key={name} value={name} />)}</datalist>
                             </div>
                             <button onClick={onManagePresets} className="p-2 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded border border-purple-200 mb-1"><BookOpen size={16}/></button>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2">
-                             <div>
-                                 <label className="text-xs text-slate-400">分類</label>
-                                 <div className="flex gap-1">
-                                     <select className="flex-1 bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white" value={editTag} onChange={e=>setEditTag(e.target.value)}><option value="default">未分類</option>{tags.map(t=><option key={t} value={t}>{t}</option>)}</select>
-                                     <button onClick={onManageTags} className="bg-blue-50 hover:bg-blue-100 text-blue-600 p-2 rounded border border-blue-200" title="管理分類"><FolderPlus size={16}/></button>
-                                 </div>
-                             </div>
-                             <div>
-                                <label className="text-xs text-slate-400">有效期限</label>
-                                <input 
-                                    type="date" 
-                                    className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]" 
-                                    value={getDatePickerValue(editExpiry)} 
-                                    onChange={e=>setEditExpiry(e.target.value)}
-                                />
+                        <div>
+                             <label className="text-xs text-slate-400">分類標籤</label>
+                             <div className="flex gap-1">
+                                 <MultiTagInput selectedTags={editTags} availableTags={tags} onChange={setEditTags} />
+                                 <button onClick={onManageTags} className="bg-blue-50 hover:bg-blue-100 text-blue-600 p-2 rounded border border-blue-200 h-fit" title="管理分類"><FolderPlus size={16}/></button>
                              </div>
                         </div>
-                        
-                        <div>
-                            <label className="text-xs text-slate-400">取得日期 (新增日期)</label>
-                            <input 
-                                type="date" 
-                                className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]" 
-                                value={editCreatedAt}
-                                onChange={e=>setEditCreatedAt(e.target.value)}
-                            />
+
+                        <div className="grid grid-cols-2 gap-2">
+                             <div>
+                                <label className="text-xs text-slate-400">有效期限</label>
+                                <input type="date" className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]" value={getDatePickerValue(editExpiry)} onChange={e=>setEditExpiry(e.target.value)}/>
+                             </div>
+                             <div>
+                                <label className="text-xs text-slate-400">取得日期</label>
+                                <input type="date" className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]" value={editCreatedAt} onChange={e=>setEditCreatedAt(e.target.value)}/>
+                            </div>
                         </div>
 
                         <div><label className="text-xs text-slate-400">序號</label><input className="w-full font-mono bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white" value={editSerial} onChange={e=>setEditSerial(e.target.value)}/></div>
@@ -867,20 +571,14 @@
                                     ))}
                                 </div>
                             )}
-                            
                             <div className="flex gap-2 overflow-x-auto no-scrollbar">
                                 <label className="flex-1 flex items-center justify-center border border-dashed border-slate-300 dark:border-slate-600 rounded p-2 text-slate-400 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors whitespace-nowrap min-w-[80px]">
                                     <Upload size={14} className="mr-1"/> 上傳
                                     <input type="file" hidden accept="image/*" multiple onChange={handleImageUpload}/>
                                 </label>
-                                <button onClick={handlePasteImageEdit} className="flex-1 flex items-center justify-center border border-dashed border-slate-300 dark:border-slate-600 rounded p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors whitespace-nowrap min-w-[80px]">
-                                    <ClipboardPaste size={14} className="mr-1"/> 貼上
-                                </button>
-                                <button onClick={()=>setShowGallery(true)} className="flex-1 flex items-center justify-center border border-dashed border-slate-300 dark:border-slate-600 rounded p-2 text-pink-500 hover:bg-pink-50 dark:hover:bg-slate-700 transition-colors whitespace-nowrap min-w-[80px]">
-                                    <ImagePlus size={14} className="mr-1"/> 圖庫
-                                </button>
+                                <button onClick={handlePasteImageEdit} className="flex-1 flex items-center justify-center border border-dashed border-slate-300 dark:border-slate-600 rounded p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors whitespace-nowrap min-w-[80px]"><ClipboardPaste size={14} className="mr-1"/> 貼上</button>
+                                <button onClick={()=>setShowGallery(true)} className="flex-1 flex items-center justify-center border border-dashed border-slate-300 dark:border-slate-600 rounded p-2 text-pink-500 hover:bg-pink-50 dark:hover:bg-slate-700 transition-colors whitespace-nowrap min-w-[80px]"><ImagePlus size={14} className="mr-1"/> 圖庫</button>
                             </div>
-                            
                             <div className="flex gap-2">
                                 <input type="text" value={editUrlInput} onChange={e=>setEditUrlInput(e.target.value)} placeholder="或輸入圖片網址..." className="flex-1 px-3 py-2 text-sm border rounded-xl bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white outline-none"/>
                                 <button onClick={handleEditUrlImport} disabled={!editUrlInput} className="px-3 bg-blue-100 text-blue-600 rounded-xl disabled:opacity-50 hover:bg-blue-200 transition-colors"><Globe size={18}/></button>
@@ -902,14 +600,12 @@
                 <div 
                     className={`${cardClasses} cursor-pointer`} 
                     onClick={() => { 
-                        if(isSelectionMode) {
-                            onSelect(task.id);
-                        } else if(!isDeleted) {
-                            setShowCodes(!showCodes);
-                        }
+                        if(isSelectionMode) { onSelect(task.id); } 
+                        else if(!isDeleted) { setShowCodes(!showCodes); }
                     }}
                 >
                     {showRaw && <RawDataModal content={task.originalRaw || task.text || "無原始內容"} onClose={()=>setShowRaw(false)} />}
+                    {showQuickAdd && <QuickAddTagModal isOpen={showQuickAdd} onClose={()=>setShowQuickAdd(false)} tags={tags} onAdd={(t)=>onAddTag(task.id, t)} />}
                     
                     <div className="absolute top-0 right-0 z-10 flex flex-col items-end">
                         {isDuplicate && !isDeleted && (
@@ -927,27 +623,17 @@
                                     {isSelectionMode ? (
                                         <input type="checkbox" checked={isSelected} onChange={() => onSelect(task.id)} className="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
                                     ) : (
-                                        // 修改為明顯的核銷按鈕
                                         <button 
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 if(!isDeleted) {
-                                                    if (isCompleted) {
-                                                        onToggle(task); // 取消核銷不用確認
-                                                    } else {
-                                                        if(confirm(`確認將「${task.productName}」標記為已使用？`)) {
-                                                            onToggle(task);
-                                                        }
-                                                    }
+                                                    if (isCompleted) onToggle(task);
+                                                    else if(confirm(`確認將「${task.productName}」標記為已使用？`)) onToggle(task);
                                                 }
                                             }}
                                             disabled={isDeleted} 
                                             className={`px-3 py-1 rounded-full text-xs font-bold shadow-sm border transition-all whitespace-nowrap ${
-                                                isDeleted 
-                                                    ? 'border-slate-200 text-slate-300 bg-slate-50' 
-                                                    : isCompleted 
-                                                        ? 'border-green-500 bg-green-500 text-white' 
-                                                        : 'border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:border-blue-300'
+                                                isDeleted ? 'border-slate-200 text-slate-300 bg-slate-50' : isCompleted ? 'border-green-500 bg-green-500 text-white' : 'border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:border-blue-300'
                                             }`}
                                         >
                                             {isCompleted ? '已使用' : '核銷'}
@@ -972,16 +658,30 @@
 
                             <div className="flex-1 min-w-0 flex flex-col justify-start">
                                 <div className="flex justify-between items-start gap-1">
-                                    <h3 
-                                        className={`font-bold text-lg leading-snug break-all ${isCompleted || isDeleted ? 'text-slate-400 line-through decoration-slate-300' : 'text-slate-800 dark:text-slate-100'}`}
-                                        // 移除 onClick 原始資料查看功能
-                                    >
-                                        {task.productName}
-                                    </h3>
+                                    <h3 className={`font-bold text-lg leading-snug break-all ${isCompleted || isDeleted ? 'text-slate-400 line-through decoration-slate-300' : 'text-slate-800 dark:text-slate-100'}`}>{task.productName}</h3>
                                 </div>
                                 
+                                {/* Tag Section - Interactive */}
                                 <div className="flex flex-wrap items-center gap-2 mt-2">
-                                    {task.tag && task.tag !== 'default' && <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${tagColor}`}>{task.tag}</span>}
+                                    {task.tags && task.tags.map(tag => (
+                                        <span 
+                                            key={tag} 
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                if(confirm(`確認移除標籤「${tag}」嗎？`)) onRemoveTag(task.id, tag);
+                                            }}
+                                            className={`text-[10px] font-bold px-2 py-0.5 rounded border cursor-pointer hover:opacity-70 flex items-center gap-1 ${getTagColorClass(tag, isDarkMode)}`}
+                                        >
+                                            {tag} <X size={8}/>
+                                        </span>
+                                    ))}
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); setShowQuickAdd(true); }}
+                                        className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-500 rounded px-1.5 py-0.5 hover:bg-slate-200 border border-slate-200 dark:border-slate-600"
+                                    >
+                                        <Plus size={10}/>
+                                    </button>
+
                                     {task.serial && (
                                         <div onClick={handleCopy} className={`flex items-center gap-1 text-sm font-mono px-2 py-0.5 rounded border transition-colors cursor-pointer active:scale-95 ${justCopied ? 'bg-green-100 text-green-700 border-green-200' : 'bg-slate-50 dark:bg-slate-700 border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-blue-400'}`}>
                                             {task.serial} {justCopied ? <Check size={12}/> : <CopyIcon size={12} className="opacity-50"/>}
@@ -1011,11 +711,7 @@
                                     <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 mb-0.5 ml-0.5">有效期限</span>
                                     {task.expiry ? (
                                         <span className={`text-sm font-black flex items-center gap-1.5 px-2.5 py-1 rounded-lg border ${
-                                            isCompleted || isDeleted 
-                                                ? 'text-slate-400 bg-slate-100 border-slate-200 dark:bg-slate-800 dark:border-slate-700' 
-                                                : isExpiring 
-                                                    ? 'text-red-600 bg-red-50 border-red-100 dark:bg-red-900/30 dark:border-red-800' 
-                                                    : 'text-green-700 bg-green-50 border-green-100 dark:bg-green-900/30 dark:border-green-800'
+                                            isCompleted || isDeleted ? 'text-slate-400 bg-slate-100 border-slate-200 dark:bg-slate-800 dark:border-slate-700' : isExpiring ? 'text-red-600 bg-red-50 border-red-100 dark:bg-red-900/30 dark:border-red-800' : 'text-green-700 bg-green-50 border-green-100 dark:bg-green-900/30 dark:border-green-800'
                                         }`}>
                                             <Calendar size={14} strokeWidth={2.5}/> {task.expiry}
                                         </span>
@@ -1064,7 +760,6 @@
                         <div className="border-t border-slate-100 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-800/50 animate-in cursor-default text-center relative z-20" onClick={e=>e.stopPropagation()}>
                             <div className="absolute top-2 right-2"><button onClick={()=>setShowCodes(false)} className="p-1 bg-slate-200 dark:bg-slate-700 rounded-full text-slate-500"><X size={16}/></button></div>
                             <h4 className="font-bold text-slate-700 dark:text-slate-200 mb-4">{task.productName}</h4>
-                            
                             {task.isTicket && (
                                 <div className="space-y-4 flex flex-col items-center">
                                     <div className="bg-white p-2 rounded-lg"><BarcodeCanvas text={task.serial} /></div>
@@ -1072,7 +767,6 @@
                                     <div className="text-2xl font-mono font-bold tracking-widest text-slate-800 dark:text-white select-all">{task.serial}</div>
                                 </div>
                             )}
-                            
                             {task.note && <div className="mt-4 bg-amber-50 dark:bg-amber-900/20 p-3 rounded-lg text-sm text-left text-slate-600 dark:text-slate-300 border border-amber-100 dark:border-amber-800/30 whitespace-pre-wrap">{task.note}</div>}
                         </div>
                     )}
@@ -1103,7 +797,6 @@
                             </div>
                         )}
                     </div>
-                    
                     {isOpen && (
                         <div className="grid grid-cols-3 gap-2 mt-4 relative z-10 border-t border-white/20 pt-3">
                             <div className="text-center"><div className="text-xs opacity-70">今日新增</div><div className="font-bold">{tasks.filter(t=> { const d = t.createdAt ? new Date(t.createdAt) : new Date(); return d.toDateString() === new Date().toDateString() }).length}</div></div>
@@ -1117,19 +810,9 @@
 
         const BottomNav = ({ view, setView, counts }) => (
             <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 pb-safe pt-2 px-6 flex justify-between items-end z-40 h-[60px] pb-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-                <button onClick={() => setView('active')} className={`flex flex-col items-center gap-1 w-16 transition-colors ${view === 'active' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`}>
-                    <ListTodo size={24} strokeWidth={view === 'active' ? 2.5 : 2} />
-                    <span className="text-[10px] font-medium">待辦</span>
-                    {counts.active > 0 && <span className="absolute top-2 ml-6 bg-blue-500 text-white text-[10px] px-1.5 rounded-full min-w-[16px] text-center">{counts.active}</span>}
-                </button>
-                <button onClick={() => setView('completed')} className={`flex flex-col items-center gap-1 w-16 transition-colors ${view === 'completed' ? 'text-green-600 dark:text-green-400' : 'text-slate-400'}`}>
-                    <CheckCircle2 size={24} strokeWidth={view === 'completed' ? 2.5 : 2} />
-                    <span className="text-[10px] font-medium">完成</span>
-                </button>
-                <button onClick={() => setView('deleted')} className={`flex flex-col items-center gap-1 w-16 transition-colors ${view === 'deleted' ? 'text-red-500' : 'text-slate-400'}`}>
-                    <Trash size={24} strokeWidth={view === 'deleted' ? 2.5 : 2} />
-                    <span className="text-[10px] font-medium">回收</span>
-                </button>
+                <button onClick={() => setView('active')} className={`flex flex-col items-center gap-1 w-16 transition-colors ${view === 'active' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`}><ListTodo size={24} strokeWidth={view === 'active' ? 2.5 : 2} /><span className="text-[10px] font-medium">待辦</span>{counts.active > 0 && <span className="absolute top-2 ml-6 bg-blue-500 text-white text-[10px] px-1.5 rounded-full min-w-[16px] text-center">{counts.active}</span>}</button>
+                <button onClick={() => setView('completed')} className={`flex flex-col items-center gap-1 w-16 transition-colors ${view === 'completed' ? 'text-green-600 dark:text-green-400' : 'text-slate-400'}`}><CheckCircle2 size={24} strokeWidth={view === 'completed' ? 2.5 : 2} /><span className="text-[10px] font-medium">完成</span></button>
+                <button onClick={() => setView('deleted')} className={`flex flex-col items-center gap-1 w-16 transition-colors ${view === 'deleted' ? 'text-red-500' : 'text-slate-400'}`}><Trash size={24} strokeWidth={view === 'deleted' ? 2.5 : 2} /><span className="text-[10px] font-medium">回收</span></button>
             </div>
         );
 
@@ -1137,14 +820,16 @@
             const [mode, setMode] = useState('paste');
             const [pasteVal, setPasteVal] = useState('');
             const [batchName, setBatchName] = useState('');
-            const [batchTag, setBatchTag] = useState('default');
+            const [batchTags, setBatchTags] = useState([]);
+            
             const [manualName, setManualName] = useState('');
             const [manualSerial, setManualSerial] = useState('');
             const [manualExpiry, setManualExpiry] = useState('');
             const [manualCreatedAt, setManualCreatedAt] = useState(''); 
             const [manualNote, setManualNote] = useState('');
             const [manualUrl, setManualUrl] = useState('');
-            const [manualTag, setManualTag] = useState('default');
+            const [manualTags, setManualTags] = useState([]);
+            
             const [pendingImages, setPendingImages] = useState([]);
             const [pendingMainImage, setPendingMainImage] = useState('');
             const [urlInput, setUrlInput] = useState('');
@@ -1153,139 +838,54 @@
 
             useEffect(() => {
                 if(isOpen) {
-                    setPasteVal(''); setManualName(''); setManualSerial(''); 
-                    setManualExpiry(''); setManualNote(''); setManualUrl(''); 
-                    setManualTag('default'); 
-                    setPendingImages([]); setPendingMainImage('');
-                    setBatchName(''); setBatchTag('default');
-                    setMode('paste');
-                    setUrlInput(''); 
+                    setPasteVal(''); setManualName(''); setManualSerial(''); setManualExpiry(''); setManualNote(''); setManualUrl(''); 
+                    setManualTags([]); setBatchTags([]);
+                    setPendingImages([]); setPendingMainImage(''); setBatchName('');
+                    setMode('paste'); setUrlInput(''); 
                     const today = new Date().toISOString().split('T')[0];
                     setManualCreatedAt(today);
                 }
             }, [isOpen]);
 
-            const handleUrlImport = async () => {
-                if(!urlInput) return;
-                try {
-                    const img = await compressImage(urlInput);
-                    addPendingImage(img);
-                    setUrlInput('');
-                } catch(e) { window.open(urlInput, '_blank'); }
-            };
-            
-            const addPendingImage = (img) => {
-                setPendingImages(prev => [...prev, img]);
-                if (!pendingMainImage) setPendingMainImage(img);
-            };
-            
-            const removePendingImage = (indexToRemove) => {
-                const imgToRemove = pendingImages[indexToRemove];
-                const newImages = pendingImages.filter((_, i) => i !== indexToRemove);
-                setPendingImages(newImages);
-                if (pendingMainImage === imgToRemove) {
-                    setPendingMainImage(newImages[0] || '');
-                }
-            };
-
-            const toggleSaveToGallery = (img) => {
-                onAddToGallery(img);
-                alert("已加入圖庫！");
-            };
+            const handleUrlImport = async () => { if(!urlInput) return; try { const img = await compressImage(urlInput); addPendingImage(img); setUrlInput(''); } catch(e) { window.open(urlInput, '_blank'); } };
+            const addPendingImage = (img) => { setPendingImages(prev => [...prev, img]); if (!pendingMainImage) setPendingMainImage(img); };
+            const removePendingImage = (idx) => { const img = pendingImages[idx]; const newImgs = pendingImages.filter((_,i)=>i!==idx); setPendingImages(newImgs); if(pendingMainImage===img) setPendingMainImage(newImgs[0]||''); };
+            const toggleSaveToGallery = (img) => { onAddToGallery(img); alert("已加入圖庫！"); };
 
             const handleSubmit = () => {
                 const results = [];
                 const now = Date.now();
                 let createdTimestamp = now;
-                if (manualCreatedAt) {
-                    const d = new Date(manualCreatedAt);
-                    const today = new Date();
-                    if (d.toDateString() !== today.toDateString()) {
-                        d.setHours(12,0,0,0);
-                        createdTimestamp = d.getTime();
-                    }
-                }
+                if (manualCreatedAt) { const d = new Date(manualCreatedAt); const today = new Date(); if (d.toDateString() !== today.toDateString()) { d.setHours(12,0,0,0); createdTimestamp = d.getTime(); } }
 
                 if (mode === 'paste') {
-                    const parsedItems = parseBatchTicketInfo(pasteVal, batchName, batchTag, pendingImages);
-                    parsedItems.forEach((item, idx) => {
-                        results.push({
-                            ...item,
-                            createdAt: createdTimestamp,
-                        });
-                    });
+                    const parsedItems = parseBatchTicketInfo(pasteVal, batchName, batchTags, pendingImages);
+                    parsedItems.forEach((item, idx) => { results.push({ ...item, createdAt: createdTimestamp }); });
                 } else {
                     const fmtExpiry = manualExpiry.replace(/-/g, '/');
                     const finalImages = pendingImages || [];
                     const finalMainImage = pendingMainImage || (finalImages.length > 0 ? finalImages[0] : '');
                     results.push({ 
-                        id: 'task_' + now + '_' + Math.random().toString(36).substr(2,9), 
-                        text: manualName, 
-                        originalRaw: pasteVal || '', 
-                        isTicket: (!!manualSerial.trim() || !!finalMainImage), 
-                        serial: manualSerial.trim(), 
-                        productName: manualName, 
-                        expiry: fmtExpiry, 
-                        completed: false, 
-                        isDeleted: false, 
-                        createdAt: createdTimestamp, 
-                        note: manualNote, 
-                        url: manualUrl, 
-                        tag: manualTag, 
-                        image: finalMainImage,
-                        images: finalImages
+                        id: 'task_' + now + '_' + Math.random().toString(36).substr(2,9), text: manualName, originalRaw: pasteVal || '', isTicket: (!!manualSerial.trim() || !!finalMainImage), serial: manualSerial.trim(), 
+                        productName: manualName, expiry: fmtExpiry, completed: false, isDeleted: false, createdAt: createdTimestamp, note: manualNote, url: manualUrl, tags: manualTags, image: finalMainImage, images: finalImages
                     });
                 }
-                
-                onAddBatch(results);
-                onClose();
+                onAddBatch(results); onClose();
             };
 
             const handleAnalyzeToManual = () => {
                 const parsed = parseTicketInfoV1(pasteVal);
-                setManualName(parsed.productName || '');
-                setManualSerial(parsed.serial || '');
+                setManualName(parsed.productName || ''); setManualSerial(parsed.serial || '');
                 const dateStr = parsed.expiry ? parsed.expiry.replace(/\//g, '-').replace(/\./g, '-') : '';
-                setManualExpiry(dateStr);
-                setMode('manual');
+                setManualExpiry(dateStr); setMode('manual');
             };
 
-            const handleImage = async (e) => {
-                const files = Array.from(e.target.files);
-                if(files.length > 0) {
-                    for (const file of files) {
-                        try {
-                            const compressed = await compressImage(file);
-                            addPendingImage(compressed);
-                        } catch(err) { console.error(err); }
-                    }
-                }
-            };
-
-            const handlePasteBtn = async () => {
-                const img = await getClipboardImage();
-                if (img) addPendingImage(img);
-            };
-
+            const handleImage = async (e) => { const files = Array.from(e.target.files); if(files.length > 0) { for (const file of files) { try { const compressed = await compressImage(file); addPendingImage(compressed); } catch(err) {} } } };
+            const handlePasteBtn = async () => { const img = await getClipboardImage(); if (img) addPendingImage(img); };
             const handlePaste = async (e) => {
-                const text = e.clipboardData.getData('text/plain');
-                const items = e.clipboardData.items;
-                let imageBlob = null;
-                for (let i = 0; i < items.length; i++) {
-                    const item = items[i];
-                    if (item.type.indexOf('image') !== -1 || (item.kind === 'file' && item.type.includes('image'))) {
-                        imageBlob = item.getAsFile();
-                        if (imageBlob) break; 
-                    }
-                }
-                if (imageBlob) {
-                    e.preventDefault(); 
-                    try {
-                        const compressed = await compressImage(imageBlob);
-                        addPendingImage(compressed);
-                    } catch (err) { console.error(err); }
-                    if (text) setPasteVal(prev => prev + (prev ? '\n' : '') + text);
-                } 
+                const text = e.clipboardData.getData('text/plain'); const items = e.clipboardData.items; let imageBlob = null;
+                for (let i = 0; i < items.length; i++) { const item = items[i]; if (item.type.indexOf('image') !== -1 || (item.kind === 'file' && item.type.includes('image'))) { imageBlob = item.getAsFile(); break; } }
+                if (imageBlob) { e.preventDefault(); try { const compressed = await compressImage(imageBlob); addPendingImage(compressed); } catch (err) {} if (text) setPasteVal(prev => prev + (prev ? '\n' : '') + text); } 
             };
 
             if(!isOpen) return null;
@@ -1293,141 +893,73 @@
             return (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center animate-in" onClick={onClose}>
                     <div className="bg-white dark:bg-slate-800 w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl p-5 max-h-[90vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
-                        <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-bold dark:text-white">新增票券</h2>
-                            <button onClick={onClose} className="bg-slate-100 dark:bg-slate-700 p-1 rounded-full text-slate-500"><X size={20}/></button>
-                        </div>
-
+                        <div className="flex justify-between items-center mb-4"><h2 className="text-xl font-bold dark:text-white">新增票券</h2><button onClick={onClose}><X size={20} className="text-slate-500"/></button></div>
                         <div className="flex bg-slate-100 dark:bg-slate-700 p-1 rounded-xl mb-4">
-                            <button onClick={()=>setMode('paste')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'paste' ? 'bg-white dark:bg-slate-600 shadow text-blue-600 dark:text-blue-300' : 'text-slate-500'}`}>智慧貼上 (批量)</button>
+                            <button onClick={()=>setMode('paste')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'paste' ? 'bg-white dark:bg-slate-600 shadow text-blue-600 dark:text-blue-300' : 'text-slate-500'}`}>智慧貼上</button>
                             <button onClick={()=>setMode('manual')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'manual' ? 'bg-white dark:bg-slate-600 shadow text-blue-600 dark:text-blue-300' : 'text-slate-500'}`}>手動輸入</button>
                         </div>
 
                         {mode === 'paste' ? (
                             <div className="space-y-3">
                                 <div className="relative">
-                                    <textarea 
-                                        value={pasteVal} 
-                                        onChange={e=>setPasteVal(e.target.value)} 
-                                        onPaste={handlePaste} 
-                                        placeholder="在此貼上多筆簡訊或文字...&#10;支援自動分割：「品名 -> 序號」或「品名 -> 期限 -> 序號」之格式" 
-                                        className="w-full h-40 p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none resize-none dark:text-white focus:ring-2 focus:ring-blue-500 transition-all" 
-                                        autoFocus 
-                                    />
-                                    <div className="absolute bottom-3 right-3 pointer-events-none">
-                                        <div className="bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400 text-[10px] px-2 py-1 rounded-md opacity-70">
-                                            支援批量解析
-                                        </div>
-                                    </div>
+                                    <textarea value={pasteVal} onChange={e=>setPasteVal(e.target.value)} onPaste={handlePaste} placeholder="在此貼上多筆簡訊..." className="w-full h-40 p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none resize-none dark:text-white focus:ring-2 focus:ring-blue-500" autoFocus />
                                 </div>
-                                
-                                {/* Batch Pre-settings */}
                                 <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl border border-blue-100 dark:border-blue-800">
-                                    <h3 className="text-xs font-bold text-blue-600 dark:text-blue-400 mb-2 flex items-center gap-1"><Layers size={12}/> 預設值 (強制套用至所有解析結果)</h3>
+                                    <h3 className="text-xs font-bold text-blue-600 dark:text-blue-400 mb-2 flex items-center gap-1"><Layers size={12}/> 預設值</h3>
                                     <div className="space-y-2">
                                         <div className="flex gap-2">
                                             <div className="flex-1 flex gap-1">
-                                                <input 
-                                                    list="preset-names-batch"
-                                                    value={batchName}
-                                                    onChange={e=>setBatchName(e.target.value)}
-                                                    placeholder="指定品名 (選填)"
-                                                    className="flex-1 px-2 py-1.5 text-sm border rounded-lg outline-none bg-white dark:bg-slate-800 dark:border-slate-600 dark:text-white"
-                                                />
-                                                <datalist id="preset-names-batch">
-                                                    {presetNames.map(name => <option key={name} value={name} />)}
-                                                </datalist>
-                                                <button onClick={onManagePresets} className="px-2 bg-white dark:bg-slate-800 text-purple-600 rounded-lg border border-purple-200 hover:bg-purple-50 dark:border-slate-600"><BookOpen size={16}/></button>
-                                            </div>
-                                            
-                                            <div className="flex-1 flex gap-1">
-                                                <select 
-                                                    value={batchTag} 
-                                                    onChange={e=>setBatchTag(e.target.value)} 
-                                                    className="flex-1 px-2 py-1.5 text-sm border rounded-lg outline-none bg-white dark:bg-slate-800 dark:border-slate-600 dark:text-white"
-                                                >
-                                                    <option value="default">未分類</option>
-                                                    {tags.map(t=><option key={t} value={t}>{t}</option>)}
-                                                </select>
-                                                <button onClick={onManageTags} className="px-2 bg-white dark:bg-slate-800 text-blue-600 rounded-lg border border-blue-200 hover:bg-blue-50 dark:border-slate-600"><FolderPlus size={16}/></button>
+                                                <input list="preset-names-batch" value={batchName} onChange={e=>setBatchName(e.target.value)} placeholder="指定品名" className="flex-1 px-2 py-1.5 text-sm border rounded-lg bg-white dark:bg-slate-800 dark:border-slate-600 dark:text-white"/>
+                                                <datalist id="preset-names-batch">{presetNames.map(name => <option key={name} value={name} />)}</datalist>
+                                                <button onClick={onManagePresets} className="px-2 bg-white dark:bg-slate-800 text-purple-600 rounded-lg border border-purple-200"><BookOpen size={16}/></button>
                                             </div>
                                         </div>
-                                        <p className="text-[10px] text-slate-500 dark:text-slate-400">* 若設定品名，將忽略智慧辨識到的名稱。</p>
+                                        <div className="flex gap-1 items-start">
+                                            <MultiTagInput selectedTags={batchTags} availableTags={tags} onChange={setBatchTags} placeholder="指定標籤..." />
+                                            <button onClick={onManageTags} className="bg-blue-50 hover:bg-blue-100 text-blue-600 p-2 rounded border border-blue-200 h-fit" title="管理分類"><FolderPlus size={16}/></button>
+                                        </div>
                                     </div>
                                 </div>
-
-                                <button 
-                                    onClick={handleAnalyzeToManual} 
-                                    disabled={!pasteVal.trim()}
-                                    className="w-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300 font-bold py-2 rounded-lg text-sm flex items-center justify-center gap-2"
-                                >
-                                    <ArrowRightLeft size={14}/> 僅解析第一筆並轉手動編輯
-                                </button>
+                                <button onClick={handleAnalyzeToManual} disabled={!pasteVal.trim()} className="w-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300 font-bold py-2 rounded-lg text-sm flex items-center justify-center gap-2"><ArrowRightLeft size={14}/> 轉手動編輯</button>
                             </div>
                         ) : (
                             <div className="space-y-3">
                                 <div className="flex gap-2 items-end">
                                     <div className="flex-1">
-                                        <input 
-                                            list="preset-names"
-                                            value={manualName} 
-                                            onChange={e=>setManualName(e.target.value)} 
-                                            placeholder="品名 (必填，可選或輸入)" 
-                                            className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none font-bold dark:text-white"
-                                        />
-                                        <datalist id="preset-names">
-                                            {presetNames.map(name => <option key={name} value={name} />)}
-                                        </datalist>
+                                        <input list="preset-names" value={manualName} onChange={e=>setManualName(e.target.value)} placeholder="品名" className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none font-bold dark:text-white"/>
+                                        <datalist id="preset-names">{presetNames.map(name => <option key={name} value={name} />)}</datalist>
                                     </div>
                                     <button onClick={onManagePresets} className="p-3 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded-xl border border-purple-200"><BookOpen size={18}/></button>
                                 </div>
-
-                                <div className="flex gap-2">
-                                    <select value={manualTag} onChange={e=>setManualTag(e.target.value)} className="flex-1 p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm dark:text-white">
-                                        <option value="default">未分類</option>
-                                        {tags.map(t=><option key={t} value={t}>{t}</option>)}
-                                    </select>
-                                    <button onClick={onManageTags} className="px-3 bg-slate-100 dark:bg-slate-700 rounded-xl text-blue-500"><FolderPlus size={18}/></button>
+                                <div>
+                                     <div className="flex gap-1 items-start">
+                                         <MultiTagInput selectedTags={manualTags} availableTags={tags} onChange={setManualTags} />
+                                         <button onClick={onManageTags} className="bg-blue-50 hover:bg-blue-100 text-blue-600 p-2 rounded border border-blue-200 h-fit" title="管理分類"><FolderPlus size={16}/></button>
+                                     </div>
                                 </div>
                                 <div className="flex gap-2">
-                                    <div className="flex-1">
-                                        <label className="text-[10px] text-slate-400 ml-1">有效期限</label>
-                                        <input type="date" value={manualExpiry} onChange={e=>setManualExpiry(e.target.value)} className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm dark:text-white dark:[color-scheme:dark]"/>
-                                    </div>
-                                    <div className="flex-1">
-                                        <label className="text-[10px] text-slate-400 ml-1">取得日期 (新增日期)</label>
-                                        <input type="date" value={manualCreatedAt} onChange={e=>setManualCreatedAt(e.target.value)} className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm dark:text-white dark:[color-scheme:dark]"/>
-                                    </div>
+                                    <div className="flex-1"><label className="text-[10px] text-slate-400 ml-1">有效期限</label><input type="date" value={manualExpiry} onChange={e=>setManualExpiry(e.target.value)} className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm dark:text-white dark:[color-scheme:dark]"/></div>
+                                    <div className="flex-1"><label className="text-[10px] text-slate-400 ml-1">取得日期</label><input type="date" value={manualCreatedAt} onChange={e=>setManualCreatedAt(e.target.value)} className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm dark:text-white dark:[color-scheme:dark]"/></div>
                                 </div>
                                 <input value={manualSerial} onChange={e=>setManualSerial(e.target.value)} placeholder="序號" className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm font-mono dark:text-white"/>
                                 <textarea value={manualNote} onChange={e=>setManualNote(e.target.value)} placeholder="備註..." className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm h-20 resize-none dark:text-white"/>
                             </div>
                         )}
 
-                        {/* Image Section */}
                         <div className="mt-4 pt-3 border-t dark:border-slate-700">
                              <div className="flex gap-2 justify-center mb-2 overflow-x-auto no-scrollbar">
                                 <button onClick={()=>fileInputRef.current.click()} className="flex items-center gap-1 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-slate-600 dark:text-slate-300 text-sm font-medium hover:bg-slate-200 whitespace-nowrap"><ImageIcon size={16}/> 上傳</button>
                                 <button onClick={handlePasteBtn} className="flex items-center gap-1 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-blue-600 dark:text-blue-300 text-sm font-medium hover:bg-slate-200 whitespace-nowrap"><ClipboardPaste size={16}/> 貼上</button>
                                 <button onClick={()=>setShowGallery(true)} className="flex items-center gap-1 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-pink-500 text-sm font-medium hover:bg-slate-200 whitespace-nowrap"><ImagePlus size={16}/> 圖庫</button>
                             </div>
-                            
-                            <div className="flex gap-2 mb-2">
-                                <input type="text" value={urlInput} onChange={e=>setUrlInput(e.target.value)} placeholder="或輸入圖片網址..." className="flex-1 px-3 py-2 text-sm border rounded-xl bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white outline-none"/>
-                                <button onClick={handleUrlImport} disabled={!urlInput} className="px-3 bg-blue-100 text-blue-600 rounded-xl disabled:opacity-50 hover:bg-blue-200 transition-colors"><Globe size={18}/></button>
-                            </div>
-
+                            <div className="flex gap-2 mb-2"><input type="text" value={urlInput} onChange={e=>setUrlInput(e.target.value)} placeholder="或輸入圖片網址..." className="flex-1 px-3 py-2 text-sm border rounded-xl bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white outline-none"/><button onClick={handleUrlImport} disabled={!urlInput} className="px-3 bg-blue-100 text-blue-600 rounded-xl disabled:opacity-50 hover:bg-blue-200 transition-colors"><Globe size={18}/></button></div>
                             {pendingImages.length > 0 && (
                                 <div className="mt-2 grid grid-cols-3 gap-2 animate-in w-full">
                                     {pendingImages.map((img, idx) => (
                                         <div key={idx} className={`relative border-2 rounded-lg overflow-hidden group h-24 cursor-pointer ${pendingMainImage === img ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200 dark:border-slate-700'}`} onClick={()=>setPendingMainImage(img)}>
                                             <img src={img} className="w-full h-full object-cover bg-slate-100 dark:bg-black/20"/>
-                                            <button onClick={(e)=>{e.stopPropagation(); toggleSaveToGallery(img);}} className="absolute bottom-1 right-1 p-1.5 rounded-full shadow-md backdrop-blur-sm bg-white/80 text-pink-500 hover:scale-110 transition-transform z-10">
-                                                <Heart size={12} fill="currentColor"/>
-                                            </button>
-                                            <button onClick={(e)=>{e.stopPropagation(); removePendingImage(idx);}} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-1 shadow-md hover:bg-red-600 transition-colors z-20">
-                                                <X size={10}/>
-                                            </button>
+                                            <button onClick={(e)=>{e.stopPropagation(); toggleSaveToGallery(img);}} className="absolute bottom-1 right-1 p-1.5 rounded-full shadow-md backdrop-blur-sm bg-white/80 text-pink-500 hover:scale-110 transition-transform z-10"><Heart size={12} fill="currentColor"/></button>
+                                            <button onClick={(e)=>{e.stopPropagation(); removePendingImage(idx);}} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-1 shadow-md hover:bg-red-600 transition-colors z-20"><X size={10}/></button>
                                             {pendingMainImage === img && <div className="absolute top-1 left-1 bg-blue-500 text-white text-[8px] px-1 rounded shadow">封面</div>}
                                         </div>
                                     ))}
@@ -1436,826 +968,9 @@
                         </div>
                         
                         <input type="file" ref={fileInputRef} hidden accept="image/*" multiple onChange={handleImage} />
-
-                        <button onClick={handleSubmit} disabled={mode==='paste' ? (!pasteVal && pendingImages.length===0) : !manualName} className="w-full mt-6 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-200 dark:shadow-none flex items-center justify-center gap-2">
-                            <Plus size={20}/> {mode === 'paste' ? '批量建立' : '建立票券'}
-                        </button>
-
+                        <button onClick={handleSubmit} disabled={mode==='paste' ? (!pasteVal && pendingImages.length===0) : !manualName} className="w-full mt-6 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-200 dark:shadow-none flex items-center justify-center gap-2"><Plus size={20}/> {mode === 'paste' ? '批量建立' : '建立票券'}</button>
                         {showGallery && <GalleryModal isOpen={showGallery} onClose={()=>setShowGallery(false)} images={gallery} onSelect={(img)=>{addPendingImage(img);}} onAddImage={onAddToGallery} onDelete={(idx)=> {const newG = [...gallery]; newG.splice(idx,1); onAddToGallery(newG, true);}} />}
                     </div>
-                </div>
-            );
-        };
-
-        const SettingsModal = ({ isOpen, onClose, tgToken, setTgToken, tgChatId, setTgChatId, notifyDays, setNotifyDays, onSave }) => {
-            const [localToken, setLocalToken] = useState(tgToken);
-            const [localChatId, setLocalChatId] = useState(tgChatId);
-            const [localDays, setLocalDays] = useState(notifyDays);
-
-            useEffect(() => {
-                if (isOpen) {
-                    setLocalToken(tgToken);
-                    setLocalChatId(tgChatId);
-                    setLocalDays(notifyDays);
-                }
-            }, [isOpen, tgToken, tgChatId, notifyDays]);
-
-            const handleSave = () => {
-                onSave({ tgToken: localToken, tgChatId: localChatId, notifyDays: localDays });
-                onClose();
-            };
-
-            if (!isOpen) return null;
-            return (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4 animate-in">
-                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-sm w-full p-6 border border-slate-100 dark:border-slate-700">
-                        <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-lg font-bold dark:text-white flex items-center gap-2">
-                                <BellRing size={20} className="text-blue-500"/> 通知設定
-                            </h2>
-                            <div className="text-[10px] bg-emerald-100 text-emerald-600 px-2 py-1 rounded-full flex items-center gap-1 font-bold">
-                                <WifiOff size={12}/> Offline Local
-                            </div>
-                        </div>
-                        
-                        <div className="space-y-3">
-                            <div>
-                                <label className="text-xs font-bold text-slate-500 dark:text-slate-400 block mb-1">快到期通知天數 (N天)</label>
-                                <div className="flex items-center gap-2">
-                                    <input 
-                                        type="number" 
-                                        min="1"
-                                        max="365"
-                                        value={localDays} 
-                                        onChange={e=>setLocalDays(parseInt(e.target.value) || 7)} 
-                                        className="w-20 p-2 text-sm text-center font-bold border rounded-lg bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
-                                    />
-                                    <span className="text-sm text-slate-600 dark:text-slate-300">天內通知</span>
-                                </div>
-                            </div>
-
-                            <div className="border-t dark:border-slate-700 my-2 pt-2">
-                                <label className="text-xs font-bold text-slate-500 dark:text-slate-400 block mb-1">Telegram Bot Token</label>
-                                <input 
-                                    type="text" 
-                                    value={localToken} 
-                                    onChange={e=>setLocalToken(e.target.value)} 
-                                    placeholder="123456:ABC-DEF..." 
-                                    className="w-full p-2 text-sm border rounded-lg bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
-                                />
-                            </div>
-                            
-                            <div>
-                                <label className="text-xs font-bold text-slate-500 dark:text-slate-400 block mb-1">Chat ID</label>
-                                <input 
-                                    type="text" 
-                                    value={localChatId} 
-                                    onChange={e=>setLocalChatId(e.target.value)} 
-                                    placeholder="12345678" 
-                                    className="w-full p-2 text-sm border rounded-lg bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
-                                />
-                            </div>
-                        </div>
-
-                        <div className="mt-6 flex justify-end gap-2">
-                            <button onClick={onClose} className="px-4 py-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-sm font-bold">取消</button>
-                            <button onClick={handleSave} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-blue-700">
-                                儲存設定
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        const DataToolsModal = ({ isOpen, onClose, tasks, onRestore, onFullExport }) => {
-            const [activeTab, setActiveTab] = useState('backup');
-            const [restoreInput, setRestoreInput] = useState('');
-            const [restoreStatus, setRestoreStatus] = useState('');
-            const [pendingImport, setPendingImport] = useState(null); 
-            const fileInputRef = useRef(null);
-
-            useEffect(() => {
-                if (isOpen) {
-                    setRestoreStatus('');
-                    setPendingImport(null);
-                    setRestoreInput('');
-                }
-            }, [isOpen]);
-
-            if (!isOpen) return null;
-
-            const handleBackupCopy = async () => {
-                const dataStr = JSON.stringify(tasks);
-                const success = await copyToClipboard(dataStr);
-                if (success) { alert(`✅ 已複製 ${tasks.length} 筆資料 (含圖片) 到剪貼簿！`); } 
-                else { alert("❌ 複製失敗。請嘗試手動選取文字或改用「下載檔案」功能。"); }
-            };
-
-            const handleFullDownload = () => {
-                onFullExport(tasks);
-            };
-
-            const processImportData = (data) => {
-                if (!Array.isArray(data)) {
-                    setRestoreStatus('❌ 格式錯誤：匯入的資料必須是陣列 (Array)');
-                    return;
-                }
-                setPendingImport(data); 
-                setRestoreStatus('');
-            };
-
-            const handleTextRestore = () => {
-                try {
-                    setRestoreStatus('解析中...');
-                    const data = JSON.parse(restoreInput);
-                    processImportData(data);
-                } catch (e) { 
-                    setRestoreStatus('❌ 格式錯誤，請確認文字為有效的 JSON'); 
-                    console.error(e); 
-                }
-            };
-
-            const handleFileRestore = (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                    try {
-                        const data = JSON.parse(event.target.result);
-                        processImportData(data);
-                    } catch (err) {
-                        setRestoreStatus('❌ 檔案讀取失敗：格式錯誤或非 JSON 檔');
-                        console.error(err);
-                    }
-                };
-                reader.onerror = () => { setRestoreStatus('❌ 檔案讀取錯誤'); };
-                reader.readAsText(file);
-            };
-
-            const executeRestore = async (mode) => {
-                if (!pendingImport) return;
-                
-                if (mode === 'overwrite') {
-                    if (!confirm(`⚠️ 嚴重警告 ⚠️\n\n此動作將會「刪除」您目前所有的資料，並完全替換成匯入的內容。\n\n確定要繼續嗎？`)) {
-                        return;
-                    }
-                }
-
-                setRestoreStatus('處理中...');
-                await onRestore(pendingImport, mode);
-                setRestoreStatus('✅ 匯入完成！');
-                setPendingImport(null);
-                setRestoreInput('');
-                if(fileInputRef.current) fileInputRef.current.value = '';
-                setTimeout(onClose, 1000);
-            };
-
-            return (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4 animate-in">
-                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-lg w-full p-0 overflow-hidden flex flex-col max-h-[90vh] border border-slate-100 dark:border-slate-700">
-                        <div className="p-4 border-b dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800">
-                            <h2 className="font-bold text-lg flex items-center gap-2 text-slate-700 dark:text-white"><Database size={20}/> 資料備份與還原</h2>
-                            <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button>
-                        </div>
-                        
-                        <div className="flex border-b dark:border-slate-700">
-                            <button onClick={() => setActiveTab('backup')} className={`flex-1 py-3 text-sm font-bold text-center transition-colors ${activeTab === 'backup' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50 dark:bg-blue-900/20' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>匯出 (備份)</button>
-                            <button onClick={() => setActiveTab('restore')} className={`flex-1 py-3 text-sm font-bold text-center transition-colors ${activeTab === 'restore' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50 dark:bg-blue-900/20' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>匯入 (還原)</button>
-                        </div>
-
-                        <div className="p-6 overflow-y-auto">
-                            {activeTab === 'backup' ? (
-                                <div className="space-y-4">
-                                    <div className="bg-blue-50 dark:bg-blue-900/30 p-4 rounded-xl border border-blue-100 dark:border-blue-800 text-center">
-                                        <div className="text-3xl font-black text-blue-600 dark:text-blue-400 mb-1">{tasks.length}</div>
-                                        <div className="text-xs text-blue-400 font-bold uppercase tracking-wider">目前總項目數</div>
-                                    </div>
-                                    <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">備份包含所有的票券資訊、備註、圖片與標籤。<br/>建議定期備份，避免清除瀏覽器快取時遺失資料。</p>
-                                    <div className="grid grid-cols-2 gap-3 mt-4">
-                                        <button onClick={handleBackupCopy} className="flex flex-col items-center justify-center gap-2 p-4 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-blue-300 transition-all group">
-                                            <div className="bg-slate-100 dark:bg-slate-600 p-3 rounded-full group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors"><Copy size={24} className="dark:text-white"/></div>
-                                            <span className="text-sm font-bold text-slate-600 dark:text-slate-300">複製到剪貼簿</span>
-                                        </button>
-                                        <button onClick={handleFullDownload} className="flex flex-col items-center justify-center gap-2 p-4 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-blue-300 transition-all group">
-                                            <div className="bg-slate-100 dark:bg-slate-600 p-3 rounded-full group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors"><Download size={24} className="dark:text-white"/></div>
-                                            <span className="text-sm font-bold text-slate-600 dark:text-slate-300">全匯出 (JSON 檔案)</span>
-                                        </button>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="space-y-4">
-                                    {pendingImport ? (
-                                        <div className="animate-in">
-                                            <div className="bg-emerald-50 dark:bg-emerald-900/20 p-4 rounded-xl border border-emerald-100 dark:border-emerald-800 text-center mb-4">
-                                                <CheckCircle2 size={32} className="mx-auto text-emerald-500 mb-2"/>
-                                                <div className="text-emerald-700 dark:text-emerald-400 font-bold">成功讀取 {pendingImport.length} 筆資料</div>
-                                            </div>
-                                            <p className="text-sm text-slate-600 dark:text-slate-300 mb-4 text-center font-bold">請問您要如何匯入這些資料？</p>
-                                            
-                                            <div className="grid grid-cols-1 gap-3">
-                                                <button onClick={() => executeRestore('append')} className="flex items-center gap-3 p-4 border border-blue-200 dark:border-slate-600 bg-blue-50 dark:bg-slate-700 rounded-xl hover:bg-blue-100 dark:hover:bg-slate-600 transition-colors text-left group">
-                                                    <div className="bg-blue-200 dark:bg-slate-500 p-2 rounded-full text-blue-700 dark:text-white"><FilePlus2 size={20}/></div>
-                                                    <div>
-                                                        <div className="font-bold text-slate-800 dark:text-white">附加 (Append)</div>
-                                                        <div className="text-xs text-slate-500 dark:text-slate-300">保留現有資料，將新資料加入清單後方</div>
-                                                    </div>
-                                                </button>
-                                                
-                                                <button onClick={() => executeRestore('overwrite')} className="flex items-center gap-3 p-4 border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 rounded-xl hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors text-left group">
-                                                    <div className="bg-red-200 dark:bg-red-800 p-2 rounded-full text-red-700 dark:text-white"><RefreshCw size={20}/></div>
-                                                    <div>
-                                                        <div className="font-bold text-red-700 dark:text-red-300">覆蓋 (Overwrite)</div>
-                                                        <div className="text-xs text-red-500 dark:text-red-400">⚠️ 刪除所有現有資料，完全替換為新資料</div>
-                                                    </div>
-                                                </button>
-                                            </div>
-                                            <button onClick={() => setPendingImport(null)} className="w-full mt-4 py-2 text-slate-400 hover:text-slate-600 text-sm">取消</button>
-                                        </div>
-                                    ) : (
-                                        <>
-                                            <div 
-                                                onClick={() => fileInputRef.current.click()}
-                                                className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-6 text-center cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors group"
-                                            >
-                                                <input 
-                                                    type="file" 
-                                                    ref={fileInputRef} 
-                                                    onChange={handleFileRestore} 
-                                                    accept=".json" 
-                                                    hidden 
-                                                />
-                                                <div className="flex flex-col items-center gap-2">
-                                                    <div className="bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 p-3 rounded-full group-hover:scale-110 transition-transform">
-                                                        <FileJson size={24}/>
-                                                    </div>
-                                                    <span className="font-bold text-slate-700 dark:text-slate-200">上傳 JSON 備份檔案</span>
-                                                    <span className="text-xs text-slate-400">點擊此處選取檔案，直接還原資料</span>
-                                                </div>
-                                            </div>
-
-                                            <div className="relative flex py-1 items-center">
-                                                <div className="flex-grow border-t border-slate-200 dark:border-slate-700"></div>
-                                                <span className="flex-shrink-0 mx-4 text-xs text-slate-400">或是貼上文字</span>
-                                                <div className="flex-grow border-t border-slate-200 dark:border-slate-700"></div>
-                                            </div>
-
-                                            <textarea value={restoreInput} onChange={(e) => setRestoreInput(e.target.value)} placeholder="請在此貼上備份的文字內容 (JSON)..." className="w-full h-24 p-3 border rounded-xl text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none resize-none bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white"></textarea>
-                                            
-                                            {restoreStatus && <div className={`text-sm font-bold text-center ${restoreStatus.includes('❌') ? 'text-red-500' : 'text-blue-600'}`}>{restoreStatus}</div>}
-                                            
-                                            <button onClick={handleTextRestore} disabled={!restoreInput.trim()} className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2"><FileJson size={18}/> 解析文字</button>
-                                        </>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        const LoginScreen = ({ onJoin }) => {
-            const [code, setCode] = useState('');
-            return (
-                <div className="min-h-screen flex items-center justify-center bg-slate-100 dark:bg-slate-900 px-4 transition-colors">
-                    <div className="max-w-md w-full bg-white dark:bg-slate-800 rounded-3xl shadow-2xl p-8 border border-slate-100 dark:border-slate-700">
-                        <div className="text-center mb-8">
-                            <div className="bg-emerald-600 w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 transform rotate-3 shadow-lg shadow-emerald-600/30"><WifiOff className="text-white w-10 h-10" /></div>
-                            <h1 className="text-3xl font-extrabold text-slate-800 dark:text-white mb-2">離線票券管家</h1>
-                            <p className="text-slate-500 dark:text-slate-400">本機儲存 · 無需網路 · 隱私安全</p>
-                        </div>
-                        <form onSubmit={(e) => {e.preventDefault(); if(code.trim()) onJoin(code.trim());}} className="space-y-5">
-                            <div>
-                                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 ml-1">建立/開啟清單 (Workspace)</label>
-                                <div className="relative"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><FolderInput className="h-5 w-5 text-gray-400" /></div><input type="text" required placeholder="請輸入自訂名稱 (如: my-tickets)" className="w-full pl-10 pr-4 py-3.5 bg-slate-50 dark:bg-slate-700 rounded-xl border border-slate-200 dark:border-slate-600 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all outline-none font-medium text-slate-800 dark:text-white" value={code} onChange={(e) => setCode(e.target.value)} /></div>
-                            </div>
-                            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2">進入清單 <ArrowRightLeft size={18} /></button>
-                        </form>
-                        <p className="text-center text-xs text-slate-400 mt-6">所有資料僅儲存於此瀏覽器中，清除快取可能會遺失資料。</p>
-                    </div>
-                </div>
-            );
-        };
-
-        const App = () => {
-            const [workspaceId, setWorkspaceId] = useState(() => localStorage.getItem('ticket_offline_workspace_id') || '');
-            const [isJoined, setIsJoined] = useState(false);
-            const [tasks, setTasks] = useState([]);
-            const [tags, setTags] = useState([]); 
-            const [gallery, setGallery] = useState([]); 
-            const [presetNames, setPresetNames] = useState([]); 
-            const [loading, setLoading] = useState(false);
-            
-            const [tgToken, setTgToken] = useState('');
-            const [tgChatId, setTgChatId] = useState('');
-            const [notifyDays, setNotifyDays] = useState(7);
-            const [showSettings, setShowSettings] = useState(false);
-
-            const [viewStatus, setViewStatus] = useState('active'); 
-            const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('pref_theme') === 'dark');
-            const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-            const [searchQuery, setSearchQuery] = useState('');
-            const [currentTagFilter, setCurrentTagFilter] = useState('all');
-            const [expiryThreshold, setExpiryThreshold] = useState(() => parseInt(localStorage.getItem('pref_expiryThreshold') || '30'));
-            const [sortType, setSortType] = useState('expiring');
-            const [previewImage, setPreviewImage] = useState(null);
-            
-            const [isSelectionMode, setIsSelectionMode] = useState(false);
-            const [selectedTasks, setSelectedTasks] = useState(new Set());
-            const [showTagManager, setShowTagManager] = useState(false);
-            const [showPresetManager, setShowPresetManager] = useState(false); 
-            const [showDataTools, setShowDataTools] = useState(false);
-            
-            const [showBatchEditPanel, setShowBatchEditPanel] = useState(false);
-            
-            const menuRef = useRef(null);
-            const [isMenuOpen, setIsMenuOpen] = useState(false);
-
-            useEffect(() => {
-                if (isDarkMode) document.documentElement.classList.add('dark');
-                else document.documentElement.classList.remove('dark');
-                localStorage.setItem('pref_theme', isDarkMode ? 'dark' : 'light');
-            }, [isDarkMode]);
-
-            const TASKS_KEY = `offline_tasks_${workspaceId}`;
-            const TAGS_KEY = `offline_tags_${workspaceId}`;
-            const GALLERY_KEY = `offline_gallery_${workspaceId}`; 
-            const PRESET_NAMES_KEY = `offline_preset_names_${workspaceId}`; 
-            const SETTINGS_KEY = `offline_settings_${workspaceId}`;
-
-            useEffect(() => {
-                if (workspaceId) {
-                    setIsJoined(true);
-                    setLoading(true);
-                    const storedTasks = localStorage.getItem(TASKS_KEY);
-                    const storedTags = localStorage.getItem(TAGS_KEY);
-                    const storedGallery = localStorage.getItem(GALLERY_KEY);
-                    const storedPresets = localStorage.getItem(PRESET_NAMES_KEY);
-                    const storedSettings = localStorage.getItem(SETTINGS_KEY);
-
-                    if (storedTasks) setTasks(JSON.parse(storedTasks));
-                    if (storedTags) setTags(JSON.parse(storedTags));
-                    if (storedGallery) setGallery(JSON.parse(storedGallery));
-                    if (storedPresets) setPresetNames(JSON.parse(storedPresets));
-                    if (storedSettings) {
-                        const parsed = JSON.parse(storedSettings);
-                        setTgToken(parsed.tgToken || '');
-                        setTgChatId(parsed.tgChatId || '');
-                        setNotifyDays(parsed.notifyDays || 7);
-                    }
-                    setLoading(false);
-                }
-            }, [workspaceId]);
-
-            useEffect(() => { if(isJoined && workspaceId) localStorage.setItem(TASKS_KEY, JSON.stringify(tasks)); }, [tasks, workspaceId, isJoined]);
-            useEffect(() => { if(isJoined && workspaceId) localStorage.setItem(TAGS_KEY, JSON.stringify(tags)); }, [tags, workspaceId, isJoined]);
-            useEffect(() => { if(isJoined && workspaceId) localStorage.setItem(GALLERY_KEY, JSON.stringify(gallery)); }, [gallery, workspaceId, isJoined]);
-            useEffect(() => { if(isJoined && workspaceId) localStorage.setItem(PRESET_NAMES_KEY, JSON.stringify(presetNames)); }, [presetNames, workspaceId, isJoined]);
-
-            useEffect(() => {
-                const handleClickOutside = (event) => {
-                    if (menuRef.current && !menuRef.current.contains(event.target)) setIsMenuOpen(false);
-                };
-                document.addEventListener("mousedown", handleClickOutside);
-                return () => document.removeEventListener("mousedown", handleClickOutside);
-            }, []);
-            
-            const handleSaveSettings = (newSettings) => {
-                setTgToken(newSettings.tgToken);
-                setTgChatId(newSettings.tgChatId);
-                setNotifyDays(newSettings.notifyDays);
-                if(isJoined && workspaceId) {
-                    localStorage.setItem(SETTINGS_KEY, JSON.stringify(newSettings));
-                }
-            };
-            
-            useEffect(() => {
-                if (isJoined && tasks.length > 0 && tgToken && tgChatId) {
-                    const todayStr = new Date().toISOString().split('T')[0];
-                    const lastCheckKey = `last_expiry_notify_date_${workspaceId}`; 
-                    const lastCheck = localStorage.getItem(lastCheckKey);
-                    
-                    if (lastCheck !== todayStr) {
-                        const expiringTasks = tasks.filter(t => !t.completed && !t.isDeleted && t.expiry && checkIsExpiringSoon(t.expiry, notifyDays));
-                        if (expiringTasks.length > 0) {
-                            let msg = `⚠️ *每日到期提醒 (${expiringTasks.length}筆)* \n`;
-                            msg += `設定天數: ${notifyDays} 天內 \n\n`;
-                            expiringTasks.slice(0, 10).forEach(t => {
-                                const days = getDaysRemaining(t.expiry);
-                                msg += `🔸 ${t.productName} (剩 ${days} 天) \n`;
-                            });
-                            if (expiringTasks.length > 10) msg += `...還有 ${expiringTasks.length - 10} 筆`;
-                            sendTelegramMessage(tgToken, tgChatId, msg);
-                        }
-                        localStorage.setItem(lastCheckKey, todayStr);
-                    }
-                }
-            }, [isJoined, tasks, tgToken, tgChatId, notifyDays, workspaceId]);
-
-            const duplicateSerials = useMemo(() => {
-                const counts = new Map();
-                tasks.forEach(t => { if (!t.isDeleted && t.serial) { const s = t.serial.trim(); if (s) counts.set(s, (counts.get(s) || 0) + 1); } });
-                const duplicates = new Set();
-                counts.forEach((count, key) => { if (count > 1) duplicates.add(key); });
-                return duplicates;
-            }, [tasks]);
-
-            // --- 優化篩選與搜尋 ---
-            const filteredTasks = useMemo(() => {
-                let result = [...tasks];
-                if (viewStatus === 'active') result = result.filter(t => !t.completed && !t.isDeleted);
-                else if (viewStatus === 'completed') result = result.filter(t => t.completed && !t.isDeleted);
-                else if (viewStatus === 'deleted') result = result.filter(t => t.isDeleted);
-
-                // 特殊篩選與標籤篩選
-                if (currentTagFilter !== 'all') {
-                    if (currentTagFilter === 'uncategorized') {
-                        result = result.filter(t => !t.tag || t.tag === 'default');
-                    } else if (currentTagFilter === 'duplicate') {
-                        // 篩選重複項目
-                        result = result.filter(t => duplicateSerials.has(t.serial));
-                    } else if (currentTagFilter === 'no_expiry') {
-                        // 篩選無期限項目
-                        result = result.filter(t => !t.expiry);
-                    } else {
-                        result = result.filter(t => t.tag === currentTagFilter);
-                    }
-                }
-
-                if (searchQuery.trim()) {
-                    const q = searchQuery.toLowerCase();
-                    result = result.filter(t => (t.productName||'').toLowerCase().includes(q) || (t.serial||'').toLowerCase().includes(q) || (t.tag||'').toLowerCase().includes(q));
-                }
-                
-                result.sort((a, b) => {
-                    const isDupA = duplicateSerials.has(a.serial);
-                    const isDupB = duplicateSerials.has(b.serial);
-                    
-                    // 1. 重複的票券移到最上面且相鄰
-                    if (isDupA && !isDupB) return -1;
-                    if (!isDupA && isDupB) return 1;
-
-                    // 如果都是重複項，按序號排序讓它們緊鄰
-                    if (isDupA && isDupB) {
-                        return a.serial.localeCompare(b.serial);
-                    }
-                    
-                    if (sortType === 'newest') {
-                        return (b.createdAt || 0) - (a.createdAt || 0);
-                    } 
-                    
-                    if (sortType === 'expiring') {
-                        const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); 
-                        const dateB = b.expiry ? new Date(b.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
-                        return dateA.getTime() - dateB.getTime(); 
-                    } else if (sortType === 'oldest') {
-                         return (a.createdAt || 0) - (b.createdAt || 0); 
-                    } else {
-                        const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); 
-                        const dateB = b.expiry ? new Date(b.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
-                        return dateA.getTime() - dateB.getTime();
-                    }
-                });
-                return result;
-            }, [tasks, viewStatus, currentTagFilter, searchQuery, sortType, duplicateSerials]);
-
-            // --- 2. 無期限分區優化 ---
-            const groupedTasks = useMemo(() => {
-                const groups = new Map();
-                filteredTasks.forEach(task => {
-                    const dateKey = task.expiry || 'No Expiry';
-                    if (!groups.has(dateKey)) {
-                        groups.set(dateKey, []);
-                    }
-                    groups.get(dateKey).push(task);
-                });
-
-                const groupArray = Array.from(groups.entries()).map(([date, tasks]) => ({
-                    date,
-                    tasks,
-                }));
-
-                // 排序分組: 無期限放最後
-                groupArray.sort((a, b) => {
-                    const dateA = a.date === 'No Expiry' ? '9999/12/31' : a.date;
-                    const dateB = b.date === 'No Expiry' ? '9999/12/31' : b.date;
-                    return new Date(dateA) - new Date(dateB);
-                });
-
-                return groupArray;
-            }, [filteredTasks]);
-
-            const handleExportTasks = (tasksToExport) => {
-                if (tasksToExport.length === 0) {
-                    alert("沒有選擇任何票券進行匯出。");
-                    return;
-                }
-                const dataStr = JSON.stringify(tasksToExport, null, 2);
-                const blob = new Blob([dataStr], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a'); a.href = url; 
-                a.download = `ticket_export_${new Date().toISOString().split('T')[0]}_${tasksToExport.length}items.json`;
-                a.click(); URL.revokeObjectURL(url);
-                alert(`✅ 已成功匯出 ${tasksToExport.length} 筆票券！`);
-            };
-
-            const handleExportSelected = () => {
-                const tasksToExport = tasks.filter(t => selectedTasks.has(t.id));
-                handleExportTasks(tasksToExport);
-                setIsSelectionMode(false); 
-                setSelectedTasks(new Set());
-                setShowBatchEditPanel(false);
-            };
-
-            const handleBatchAdd = (newTasks) => {
-                setTasks(prev => [...newTasks, ...prev]);
-                setViewStatus('active');
-            };
-
-            const handleUpdateTicket = (id, name, serial, expiry, image, images, url, note, tag, newCreatedAt) => {
-                setTasks(prev => prev.map(t => t.id === id ? { ...t, productName: name, serial, expiry, image, images, url, note, tag, createdAt: newCreatedAt || t.createdAt } : t));
-            };
-            
-            const handleToggleComplete = (task) => { 
-                const newStatus = !task.completed;
-                if (newStatus === true && tgToken && tgChatId) {
-                    const msg = `🎫 *票券已使用完畢* \n\n📦 *品名*: ${task.productName || '未命名'} \n🔢 *序號*: \`${task.serial || '無'}\` \n📅 *期限*: ${task.expiry || '無'} \n⏰ *時間*: ${new Date().toLocaleString('zh-TW')}`;
-                    sendTelegramMessage(tgToken, tgChatId, msg);
-                }
-                setTasks(prev => prev.map(t => t.id === task.id ? { ...t, completed: newStatus, completedAt: newStatus ? Date.now() : null } : t));
-            };
-            
-            const handleDelete = (id) => { setTasks(prev => prev.map(t => t.id === id ? { ...t, isDeleted: true, deletedAt: Date.now() } : t)); };
-            const handleRestore = (task) => { setTasks(prev => prev.map(t => t.id === task.id ? { ...t, isDeleted: false, completed: false } : t)); };
-            const handlePermanentDelete = (id) => { if (confirm("永久刪除？")) setTasks(prev => prev.filter(t => t.id !== id)); };
-            
-            const handleBatchDelete = () => { 
-                if (!selectedTasks.size) return; 
-                const isRecycleBin = viewStatus === 'deleted';
-                if(confirm(isRecycleBin ? `確定要永久刪除這 ${selectedTasks.size} 個項目嗎？` : `確定要將這 ${selectedTasks.size} 個項目移至回收桶嗎？`)) { 
-                    if (isRecycleBin) setTasks(prev => prev.filter(t => !selectedTasks.has(t.id)));
-                    else setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, isDeleted: true } : t));
-                    setIsSelectionMode(false); setSelectedTasks(new Set()); 
-                    setShowBatchEditPanel(false);
-                }
-            };
-            
-            const handleBatchUpdateName = (name) => {
-                setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, productName: name } : t));
-            };
-            
-            const handleBatchUpdateTag = (tag) => {
-                setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, tag: tag } : t));
-            };
-
-            const handleBatchUpdateDate = (date) => {
-                const formattedExpiry = date.replace(/-/g, '/');
-                setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, expiry: formattedExpiry } : t));
-            };
-
-            const handleBatchUpdateImage = (images) => {
-                const mainImg = images[0];
-                setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, image: mainImg, images: images } : t));
-            };
-            
-            const handleSelectAll = () => {
-                if (filteredTasks.length === 0) return;
-                const allSelected = filteredTasks.every(task => selectedTasks.has(task.id));
-                const newSet = new Set(selectedTasks);
-                if (allSelected) filteredTasks.forEach(task => newSet.delete(task.id));
-                else filteredTasks.forEach(task => newSet.add(task.id));
-                setSelectedTasks(newSet);
-            };
-
-            const handleSelect = (id) => { 
-                const newSet = new Set(selectedTasks); 
-                if (newSet.has(id)) newSet.delete(id); else newSet.add(id); 
-                setSelectedTasks(newSet); 
-            };
-
-            const handleBatchRestore = async (data, mode) => { 
-                const newTasks = data.map(item => ({ ...item, id: 'restored_' + Date.now() + '_' + Math.random().toString(36).substr(2,9), createdAt: item.createdAt || Date.now() }));
-                if (mode === 'overwrite') setTasks(newTasks); else setTasks(prev => [...newTasks, ...prev]);
-            };
-
-            const addToGallery = (imgOrArray, isFullUpdate = false) => {
-                if(isFullUpdate) setGallery(imgOrArray);
-                else if(!gallery.includes(imgOrArray)) setGallery(prev => [imgOrArray, ...prev]);
-            };
-
-            if (!isJoined) return <LoginScreen onJoin={(id)=>{setWorkspaceId(id); localStorage.setItem('ticket_offline_workspace_id', id); setIsJoined(true);}} />;
-
-            return (
-                <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-32">
-                    <div className="sticky top-0 z-30 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 transition-colors">
-                        <div className="max-w-3xl mx-auto px-4 py-3">
-                            <div className="flex justify-between items-center mb-3">
-                                <h1 className="font-extrabold text-lg text-slate-800 dark:text-white flex items-center gap-2">
-                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V2.7</span>
-                                </h1>
-                                <div className="flex items-center gap-3">
-                                    <button onClick={()=>setIsDarkMode(!isDarkMode)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
-                                        {isDarkMode ? <Sun size={20} className="text-yellow-400"/> : <Moon size={20}/>}
-                                    </button>
-                                    <div className="relative" ref={menuRef}>
-                                        <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full text-slate-500"><MoreVertical size={20}/></button>
-                                        {isMenuOpen && (
-                                            <div className="absolute right-0 top-full mt-1 bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-xl shadow-xl p-1 min-w-[150px] z-50 animate-in">
-                                                <div className="px-3 py-2 text-xs font-bold text-slate-400 border-b border-slate-100 dark:border-slate-700 mb-1">ID: {workspaceId}</div>
-                                                <button onClick={() => { setShowSettings(true); setIsMenuOpen(false); }} className="w-full text-left px-3 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-slate-700 rounded-lg flex gap-2"><BellRing size={16} /> 通知設定</button>
-                                                <button onClick={() => { setShowDataTools(true); setIsMenuOpen(false); }} className="w-full text-left px-3 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-slate-700 rounded-lg flex gap-2"><Database size={16} /> 備份還原</button>
-                                                <button onClick={() => { localStorage.removeItem('ticket_offline_workspace_id'); setIsJoined(false); }} className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg flex gap-2"><LogIn size={16}/> 登出 (切換清單)</button>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="relative w-full">
-                                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                                <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="搜尋..." className="w-full pl-9 pr-2 py-2 text-sm bg-slate-100 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 dark:text-white transition-all" />
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="max-w-3xl mx-auto px-4 py-4">
-                        {viewStatus === 'active' && <Dashboard tasks={tasks} expiryThreshold={expiryThreshold} />}
-
-                        <div className="mb-4">
-                            <div className="flex gap-2 overflow-x-auto no-scrollbar items-center pb-1">
-                                <button onClick={() => setCurrentTagFilter('all')} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap border transition-colors ${currentTagFilter === 'all' ? 'bg-slate-800 text-white border-slate-800 dark:bg-slate-200 dark:text-slate-900' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>全部</button>
-                                {/* 3. 新增特殊篩選項目 */}
-                                <button onClick={() => setCurrentTagFilter('duplicate')} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1 border transition-colors ${currentTagFilter === 'duplicate' ? 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
-                                    <CopyPlus size={10} /> 重複項目
-                                </button>
-                                <button onClick={() => setCurrentTagFilter('no_expiry')} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1 border transition-colors ${currentTagFilter === 'no_expiry' ? 'bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
-                                    <CalendarX2 size={10} /> 無期限
-                                </button>
-                                {tags.map(tag => (
-                                    <button key={tag} onClick={() => setCurrentTagFilter(tag)} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1 border transition-colors ${currentTagFilter === tag ? 'bg-blue-600 text-white border-blue-600' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
-                                        <Tag size={10} /> {tag}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-
-                        <div className="flex justify-between items-start mb-4">
-                            <div className="flex gap-2 items-center flex-wrap">
-                                <button onClick={()=>{
-                                    setIsSelectionMode(!isSelectionMode);
-                                    if(isSelectionMode) { setSelectedTasks(new Set()); setShowBatchEditPanel(false); }
-                                }} className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${isSelectionMode ? 'bg-slate-800 text-white dark:bg-white dark:text-slate-900' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'}`}>{isSelectionMode ? '完成選取' : '多選'}</button>
-                                {isSelectionMode && (
-                                    <>
-                                        <button 
-                                            onClick={handleSelectAll} 
-                                            className="text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 flex items-center gap-1 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors"
-                                        >
-                                            <CheckSquareIcon size={12}/> 
-                                            {filteredTasks.length > 0 && filteredTasks.every(t => selectedTasks.has(t.id)) ? '取消全選' : '全選'}
-                                        </button>
-
-                                        {/* 批量編輯按鈕 */}
-                                        {selectedTasks.size > 0 && (
-                                            <button 
-                                                onClick={() => setShowBatchEditPanel(true)} 
-                                                className="text-xs font-bold px-3 py-1.5 rounded-lg bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 flex items-center gap-1"
-                                            >
-                                                <Layers size={12}/> 批量編輯
-                                            </button>
-                                        )}
-                                        
-                                        {/* 匯出已選按鈕 */}
-                                        {selectedTasks.size > 0 && (
-                                            <button 
-                                                onClick={handleExportSelected}
-                                                className="text-xs font-bold px-3 py-1.5 rounded-lg bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 flex items-center gap-1"
-                                            >
-                                                <FileUp size={12}/> 匯出 ({selectedTasks.size})
-                                            </button>
-                                        )}
-
-                                        {/* 刪除按鈕 */}
-                                        {selectedTasks.size > 0 && (
-                                            <button onClick={handleBatchDelete} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 flex items-center gap-1">
-                                                <Trash size={12}/> 
-                                                {viewStatus === 'deleted' ? '永久刪除' : '刪除'} 
-                                                ({selectedTasks.size})
-                                            </button>
-                                        )}
-                                    </>
-                                )}
-                            </div>
-                            <div className="flex items-center gap-2 flex-shrink-0">
-                                <div className="flex items-center gap-1 bg-amber-50 dark:bg-amber-900/20 px-2 py-1 rounded-md border border-amber-100 dark:border-amber-800/30">
-                                    <Clock size={12} className="text-amber-500" />
-                                    <select value={expiryThreshold} onChange={(e) => setExpiryThreshold(parseInt(e.target.value))} className="bg-transparent outline-none font-bold text-amber-800 dark:text-amber-500 text-[10px]"><option value="7">7天</option><option value="14">14天</option><option value="30">30天</option><option value="90">90天</option></select>
-                                </div>
-                                <select value={sortType} onChange={(e)=>setSortType(e.target.value)} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 text-xs rounded-lg py-1.5 px-2 outline-none font-bold">
-                                    <option value="expiring">快到期</option><option value="newest">最新</option><option value="oldest">最早</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        {loading ? (
-                            <div className="text-center py-20 text-slate-400 animate-pulse">載入中...</div>
-                        ) : groupedTasks.length === 0 ? (
-                            <div className="text-center py-20 opacity-50">
-                                <div className="bg-slate-200 dark:bg-slate-700 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4"><ListTodo size={40} className="text-slate-400 dark:text-slate-500"/></div>
-                                <p className="text-slate-400 dark:text-slate-500 font-bold">這裡空空如也</p>
-                            </div>
-                        ) : (
-                            <div className="space-y-4">
-                                {groupedTasks.map((group, groupIndex) => (
-                                    <div 
-                                        key={group.date} 
-                                        className={`rounded-xl shadow-md overflow-hidden p-3 transition-colors duration-300 
-                                            ${group.date === 'No Expiry' 
-                                                ? 'bg-orange-50/50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-800/30 mt-8' 
-                                                : (groupIndex % 2 === 0 ? 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700' : 'bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50')
-                                            }`}
-                                    >
-                                        <h4 className={`text-sm font-black mb-3 px-1 flex items-center gap-2 ${group.date === 'No Expiry' ? 'text-orange-600 dark:text-orange-400' : 'text-blue-600 dark:text-blue-400'}`}>
-                                            {group.date === 'No Expiry' ? <CalendarX2 size={16}/> : <Calendar size={14}/>}
-                                            {group.date === 'No Expiry' ? '📅 永久/無期限票券' : `⏳ 期限：${group.date}`}
-                                        </h4>
-                                        <div className="space-y-1">
-                                            {group.tasks.map(task => (
-                                                <TaskItem 
-                                                    key={task.id} 
-                                                    task={task} 
-                                                    tags={tags} 
-                                                    gallery={gallery}
-                                                    presetNames={presetNames}
-                                                    onAddToGallery={addToGallery}
-                                                    onManagePresets={() => setShowPresetManager(true)}
-                                                    onToggle={handleToggleComplete} 
-                                                    onDelete={handleDelete} 
-                                                    onRestore={handleRestore} 
-                                                    onPermanentDelete={handlePermanentDelete} 
-                                                    onUpdateTicket={handleUpdateTicket} 
-                                                    isSelectionMode={isSelectionMode} 
-                                                    isSelected={selectedTasks.has(task.id)} 
-                                                    onSelect={handleSelect} 
-                                                    expiryThreshold={expiryThreshold} 
-                                                    isDuplicate={duplicateSerials.has(task.serial)} 
-                                                    isDarkMode={isDarkMode} 
-                                                    onManageTags={() => setShowTagManager(true)}
-                                                    onPreviewImage={(src) => setPreviewImage(src)}
-                                                />
-                                            ))}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
-                    <button 
-                        onClick={() => setIsAddModalOpen(true)}
-                        className="fixed bottom-24 right-5 bg-blue-600 hover:bg-blue-700 text-white w-14 h-14 rounded-full shadow-xl shadow-blue-600/40 flex items-center justify-center z-40 transition-transform active:scale-90"
-                    >
-                        <Plus size={28} />
-                    </button>
-
-                    <BottomNav view={viewStatus} setView={setViewStatus} counts={{ active: tasks.filter(t=>!t.completed && !t.isDeleted).length }} />
-                    
-                    <AddTaskModal 
-                        isOpen={isAddModalOpen} 
-                        onClose={()=>setIsAddModalOpen(false)} 
-                        onAddBatch={handleBatchAdd} 
-                        tags={tags} 
-                        onManageTags={() => setShowTagManager(true)} 
-                        gallery={gallery}
-                        onAddToGallery={addToGallery}
-                        presetNames={presetNames}
-                        onManagePresets={() => setShowPresetManager(true)}
-                    />
-                    
-                    {/* Batch Edit Panel (Modified Logic) */}
-                    {showBatchEditPanel && (
-                        <BatchEditPanel 
-                            selectedCount={selectedTasks.size} 
-                            tags={tags} 
-                            onUpdateName={handleBatchUpdateName} 
-                            onUpdateTag={handleBatchUpdateTag} 
-                            onUpdateImage={handleBatchUpdateImage}
-                            onUpdateDate={handleBatchUpdateDate} 
-                            gallery={gallery}
-                            onAddToGallery={addToGallery}
-                            onManageTags={() => setShowTagManager(true)}
-                            onManagePresets={() => setShowPresetManager(true)}
-                            presetNames={presetNames}
-                            onClose={() => setShowBatchEditPanel(false)}
-                        />
-                    )}
-
-                    <TagManagerModal isOpen={showTagManager} onClose={() => setShowTagManager(false)} tags={tags} onAddTag={(t)=>{if(!tags.includes(t)) setTags([...tags,t])}} onDeleteTag={(t)=>{setTags(tags.filter(x=>x!==t))}} onRenameTag={(o,n)=>{setTags(tags.map(t=>t===o?n:t))}} />
-                    <PresetManagerModal isOpen={showPresetManager} onClose={() => setShowPresetManager(false)} presets={presetNames} onAddPreset={(n)=>{if(!presetNames.includes(n)) setPresetNames([...presetNames,n])}} onDeletePreset={(n)=>{setPresetNames(presetNames.filter(x=>x!==n))}} />
-                    {showDataTools && <DataToolsModal isOpen={showDataTools} onClose={() => setShowDataTools(false)} tasks={tasks} onRestore={handleBatchRestore} onFullExport={handleExportTasks}/>}
-                    {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} tgToken={tgToken} setTgToken={setTgToken} tgChatId={tgChatId} setTgChatId={setTgChatId} notifyDays={notifyDays} setNotifyDays={setNotifyDays} onSave={handleSaveSettings} />}
-                    {previewImage && <ImagePreviewModal src={previewImage} onClose={() => setPreviewImage(null)} />}
                 </div>
             );
         };
