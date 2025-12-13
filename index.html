@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V2.6.2 訂購人備註版)</title>
+    <title>離線票券管家 (V2.6.2 功能修復版)</title>
     
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -198,24 +198,25 @@
             try { await fetch(url, { mode: 'no-cors' }); return true; } catch (error) { console.error("TG Send Error:", error); return false; }
         };
 
-        // --- 1. 改進後的智慧辨識邏輯 (V2.6.2 Add Purchaser to Note) ---
+        // --- 1. 增強後的智慧辨識邏輯 (加入訂購人備註) ---
         const parseBatchTicketInfo = (text, overrideName, overrideTag, overrideImages) => {
             const results = [];
             const lines = text.split(/\r?\n/);
             let currentNameCandidate = "";
             let foundAny = false;
-            let currentPurchaser = ""; // NEW: 暫存訂購人資訊
+            let currentOrderer = ""; // 新增訂購人暫存
 
             const cleanLine = (l) => l.trim();
 
             lines.forEach((rawLine, index) => {
                 const line = cleanLine(rawLine);
                 if (!line) return;
-                
-                // NEW: 提取訂購人資訊
-                const purchaserMatch = line.match(/(?:訂購人)[:：\s]*([\p{sc=Han}A-Za-z\s]+)/iu);
-                if (purchaserMatch && purchaserMatch[1].trim()) {
-                    currentPurchaser = purchaserMatch[1].trim();
+
+                // --- 偵測訂購人 (Fix 1) ---
+                // 擴大偵測範圍，匹配直到行尾 (包含空格，但不包含換行符)
+                const ordererMatch = line.match(/(?:訂購人|購買者)[:：\s]*([^\n\r]+)/i);
+                if (ordererMatch && ordererMatch[1]) {
+                    currentOrderer = ordererMatch[1].trim();
                 }
 
                 // --- Date extraction (Handle YYYY/MM/DD format, even with prefix) ---
@@ -259,13 +260,17 @@
                         finalName = currentNameCandidate;
                     } else {
                          // Fallback: use previous line as name if it seems like content
-                         if (index > 0 && cleanLine(lines[index-1]).length > 2 && !lines[index-1].includes("期限") && !lines[index-1].includes("狀態") && !lines[index-1].includes("訂購人")) {
+                         if (index > 0 && cleanLine(lines[index-1]).length > 2 && !lines[index-1].includes("期限") && !lines[index-1].includes("狀態")) {
                              finalName = cleanLine(lines[index-1]);
                          }
                     }
-                    
-                    // NEW: 組合備註
-                    let note = currentPurchaser ? `訂購人: ${currentPurchaser}` : '';
+
+                    // 1. 如果有訂購人，將訂購人加入備注
+                    let note = "";
+                    if (currentOrderer) {
+                        note = `訂購人: ${currentOrderer}`;
+                        currentOrderer = ""; // 清除訂購人
+                    }
 
                     results.push({
                         id: 'task_' + Date.now() + '_' + index + '_' + Math.random().toString(36).substr(2,5), // New ID generation inside batch logic
@@ -281,13 +286,12 @@
                         completed: false,
                         isDeleted: false,
                         createdAt: Date.now(),
-                        note: note, // 設置備註
+                        note: note, // 加入訂購人備註
                         url: '',
                     });
                     
-                    // Clear state for next ticket
+                    // Clear name candidate if a ticket was created, as the next name should be for the next ticket.
                     currentNameCandidate = ""; 
-                    currentPurchaser = "";
                     
                 } else if (dateStr) {
                     // If it's a date line but no serial, check the *previous* ticket and see if we can assign the date.
@@ -300,9 +304,9 @@
                     }
                 
                 } else {
-                    // It's not a serial line, not a date line, not a purchaser line. It might be a name candidate.
+                    // It's not a serial line, not a date line. It might be a name candidate.
                     // Only update name candidate if the line is likely descriptive text.
-                    if (line.length > 2 && !line.includes('單價') && !line.includes('說明') && !line.includes('狀態') && !line.includes('兌換期限')) {
+                    if (line.length > 2 && !line.includes('單價') && !line.includes('說明') && !line.includes('狀態') && !line.includes('兌換期限') && !line.includes('訂購人')) {
                         currentNameCandidate = line;
                     }
                 }
@@ -314,14 +318,12 @@
                 const finalImages = (overrideImages && overrideImages.length > 0) ? overrideImages : [];
                 const finalImage = finalImages.length > 0 ? finalImages[0] : '';
                 
-                // Check purchaser again in the raw text if no tickets were created yet
-                if (!currentPurchaser) {
-                     const singlePurchaserMatch = text.match(/(?:訂購人)[:：\s]*([\p{sc=Han}A-Za-z\s]+)/iu);
-                     if (singlePurchaserMatch && singlePurchaserMatch[1].trim()) {
-                         currentPurchaser = singlePurchaserMatch[1].trim();
-                     }
+                // 1. 如果是單一模式，也嘗試提取訂購人 (Fix 1)
+                let fallbackNote = "";
+                const ordererMatch = text.match(/(?:訂購人|購買者)[:：\s]*([^\n\r]+)/i);
+                if (ordererMatch && ordererMatch[1]) {
+                    fallbackNote = `訂購人: ${ordererMatch[1].trim()}`;
                 }
-                const note = currentPurchaser ? `訂購人: ${currentPurchaser}` : '';
 
                 if (singleResult.isTicket || singleResult.productName !== "未命名票券") {
                      results.push({
@@ -334,7 +336,7 @@
                         completed: false,
                         isDeleted: false,
                         createdAt: Date.now(),
-                        note: note,
+                        note: fallbackNote, // 添加備註
                         url: '',
                      });
                 } else if (finalImages.length > 0) {
@@ -352,7 +354,7 @@
                         completed: false,
                         isDeleted: false,
                         createdAt: Date.now(),
-                        note: note,
+                        note: fallbackNote, // 添加備註
                         url: '',
                      });
                 }
@@ -649,7 +651,7 @@
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
                             <input 
-                                list="tag-names-batch-edit"
+                                list="tag-names-batch-edit" // 允許手動輸入或從標籤庫選擇
                                 value={tag}
                                 onChange={e=>setTag(e.target.value)}
                                 placeholder="統一修改分類 (可手動輸入或選擇)..."
@@ -690,7 +692,7 @@
             );
         };
 
-        const TaskItem = ({ task, tags, onToggle, onDelete, onRestore, onPermanentDelete, onUpdateTicket, isSelectionMode, isSelected, onSelect, expiryThreshold, isDuplicate, isDarkMode, onManageTags, onPreviewImage, gallery, onAddToGallery, presetNames, onManagePresets }) => {
+        const TaskItem = ({ task, tags, onToggle, onDelete, onRestore, onPermanentDelete, onUpdateTicket, isSelectionMode, isSelected, onSelect, expiryThreshold, isDuplicate, isNoExpiry, isDarkMode, onManageTags, onPreviewImage, gallery, onAddToGallery, presetNames, onManagePresets }) => {
             const [showCodes, setShowCodes] = useState(false);
             const [justCopied, setJustCopied] = useState(false);
             const [isEditing, setIsEditing] = useState(false);
@@ -741,7 +743,7 @@
             
             if (isDuplicate && !isDeleted) {
                 cardClasses += 'border-2 border-red-500 shadow-xl shadow-red-200 dark:shadow-red-900/40 animate-pulse-red z-10 ';
-            } else if (isExpiring && !isDeleted) {
+            } else if (isExpiring && !isDuplicate && !isNoExpiry) {
                 cardClasses += 'border border-red-300 shadow-md shadow-red-100 ';
             }
 
@@ -932,7 +934,13 @@
                                 <AlertOctagon size={12} strokeWidth={3}/> 重複序號
                             </div>
                         )}
-                        {isExpiring && !isDuplicate && <div className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-bl-lg font-bold shadow-sm">即將到期</div>}
+                        {/* 2. 無期限警告 (只在非重複、非刪除狀態下顯示) */}
+                        {isNoExpiry && !isDuplicate && !isDeleted && (
+                            <div className="bg-amber-600 text-yellow-100 text-xs px-3 py-1 rounded-bl-lg font-black shadow-md mb-[1px] flex items-center gap-1 animate-bounce-slight border-l border-b border-white/20">
+                                <AlertOctagon size={12} strokeWidth={3}/> 無期限警告
+                            </div>
+                        )}
+                        {isExpiring && !isDuplicate && !isNoExpiry && !isDeleted && <div className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-bl-lg font-bold shadow-sm">即將到期</div>}
                     </div>
 
                     <div className="pt-4 pb-2 px-3 relative">
@@ -1894,6 +1902,18 @@
                 counts.forEach((count, key) => { if (count > 1) duplicates.add(key); });
                 return duplicates;
             }, [tasks]);
+            
+            // 2. 判斷無期限票券
+            const noExpiryTasks = useMemo(() => {
+                const noExpiry = new Set();
+                tasks.forEach(t => {
+                    if (!t.completed && !t.isDeleted && !t.expiry && t.isTicket) {
+                         noExpiry.add(t.id);
+                    }
+                });
+                return noExpiry;
+            }, [tasks]);
+
 
             // 處理排序和過濾，生成平面列表
             const filteredTasks = useMemo(() => {
@@ -1917,29 +1937,43 @@
                     const isDupA = duplicateSerials.has(a.serial);
                     const isDupB = duplicateSerials.has(b.serial);
                     
-                    // 1. 優先處理重複項目
+                    // 2. 判斷無期限
+                    const isNoExpiryA = noExpiryTasks.has(a.id);
+                    const isNoExpiryB = noExpiryTasks.has(b.id);
+                    
+                    // Priority 1: 重複的票券移到最上面
                     if (isDupA && !isDupB) return -1;
                     if (!isDupA && isDupB) return 1;
 
-                    // 2. 如果都是重複項，按序號分組
+                    // Priority 2: 無期限警告移到最上面 (在非重複項目中)
+                    if (!isDupA && !isDupB) {
+                        if (isNoExpiryA && !isNoExpiryB) return -1;
+                        if (!isNoExpiryA && isNoExpiryB) return 1;
+                    }
+                    
+                    // 如果都是重複項，按序號分組
                     if (isDupA && isDupB) {
                         if (a.serial < b.serial) return -1;
                         if (a.serial > b.serial) return 1;
                     }
                     
                     // 3. 按照選定的排序方式
-                    if (sortType === 'expiring') {
+                    if (sortType === 'newest') {
+                        return (b.createdAt || 0) - (a.createdAt || 0); // 降序 (最新在前面)
+                    } else if (sortType === 'expiring') {
+                        const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); 
+                        const dateB = b.expiry ? new Date(b.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+                        return dateA.getTime() - dateB.getTime(); // 升序 (最早的在前面)
+                    } else if (sortType === 'oldest') {
+                         return (a.createdAt || 0) - (b.createdAt || 0); // 升序 (最舊的在前面)
+                    } else { 
                         const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); 
                         const dateB = b.expiry ? new Date(b.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
                         return dateA.getTime() - dateB.getTime();
-                    } else if (sortType === 'oldest') {
-                         return (a.createdAt || 0) - (b.createdAt || 0);
-                    } else { // newest
-                        return (b.createdAt || 0) - (a.createdAt || 0);
                     }
                 });
                 return result;
-            }, [tasks, viewStatus, currentTagFilter, searchQuery, sortType, duplicateSerials]);
+            }, [tasks, viewStatus, currentTagFilter, searchQuery, sortType, duplicateSerials, noExpiryTasks]);
 
             // 1. 每段同時間到期票券自成一個區域
             const groupedTasks = useMemo(() => {
@@ -2216,6 +2250,7 @@
                                                     onSelect={handleSelect} 
                                                     expiryThreshold={expiryThreshold} 
                                                     isDuplicate={duplicateSerials.has(task.serial)} 
+                                                    isNoExpiry={noExpiryTasks.has(task.id)} // 2. 傳遞無期限狀態
                                                     isDarkMode={isDarkMode} 
                                                     onManageTags={() => setShowTagManager(true)}
                                                     onPreviewImage={(src) => setPreviewImage(src)}
@@ -2244,8 +2279,8 @@
                         tags={tags} 
                         onManageTags={() => setShowTagManager(true)} 
                         gallery={gallery}
-                        presetNames={presetNames}
                         onAddToGallery={addToGallery}
+                        presetNames={presetNames}
                         onManagePresets={() => setShowPresetManager(true)}
                     />
                     
