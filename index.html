@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V3.2 AI 標籤與排序修正版)</title>
+    <title>離線票券管家 (V3.2 AI 標籤邏輯修正版)</title>
 
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -144,7 +144,7 @@
          * 呼叫 Gemini API 進行票券資訊的 JSON 結構化解析。
          * @param {string} text - 原始的票券文字內容 (簡訊/Email 內容等)。
          * @param {string} apiKey - Google Gemini API Key。
-         * @returns {Promise<Array<{productName: string, serial: string, expiry: string, tags: string[], originalRaw: string}>>} - 解析後的票券陣列。
+         * @returns {Promise<Array<{productName: string, serial: string, expiry: string, originalRaw: string}>>} - 解析後的票券陣列。
          */
         const callGeminiParsing = async (text, apiKey) => {
             if (!apiKey) throw new Error("API Key 未設定。");
@@ -184,8 +184,8 @@ ${text}
 1. productName: string, 提取品名，並移除所有空格。
 2. serial: string, 提取序號/代碼，並移除前兩碼流水號（如果存在且是數字）。
 3. expiry: string, 提取有效期限，格式為 YYYY/MM/DD。
-4. tags: string[], 根據品名自動生成 1~2 個合適的中文標籤 (例如：星巴克 、85度C、咖啡、蛋糕、幣)。
-5. originalRaw: string, 該票券資訊在原始文字中的完整段落或最相關句子。`;
+// 根據使用者要求，移除 AI 自動生成標籤的要求
+4. originalRaw: string, 該票券資訊在原始文字中的完整段落或最相關句子。`;
 
             const payload = {
                 contents: [{ parts: [{ text: `請使用以下提取規則分析原始文字，並回傳 JSON 陣列:\n\n原始文字:\n---${text}\n---` }] }],
@@ -202,13 +202,10 @@ ${text}
                                 "productName": { "type": "STRING" },
                                 "serial": { "type": "STRING" },
                                 "expiry": { "type": "STRING" },
-                                "tags": { 
-                                    "type": "ARRAY",
-                                    "items": { "type": "STRING" }
-                                },
+                                // 根據使用者要求，移除 tags 欄位定義
                                 "originalRaw": { "type": "STRING" }
                             },
-                            required: ["productName", "serial", "expiry", "tags", "originalRaw"]
+                            required: ["productName", "serial", "expiry", "originalRaw"]
                         }
                     }
                 }
@@ -285,7 +282,7 @@ ${text}
                         productName: productName,
                         serial: serial,
                         expiry: expiry,
-                        // tags: item.tags (保留 AI 建議的標籤)
+                        // tags: item.tags (AI 不應回傳此欄位，即使回傳也應在 handleAiParsing 中被忽略)
                     };
                 });
                 
@@ -1532,6 +1529,7 @@ ${text}
 
                 setAiLoading(true);
                 try {
+                    // callGeminiParsing 已經不會要求 tags，且不會在前端處理時加入 tags
                     const aiResults = await callGeminiParsing(pasteVal, geminiApiKey);
                     
                     if (!aiResults || aiResults.length === 0) {
@@ -1544,9 +1542,8 @@ ${text}
                         // 統一處理 AI 提供的資訊，轉換為 App 內部格式
                         const finalName = batchName.trim() || item.productName || "AI解析票券";
                         
-                        // 2. 使用者要求: 加上 ["AI解析"] 標籤
-                        const combinedTags = [...(item.tags || []), ...batchTags, "AI解析"];
-                        const finalTags = [...new Set(combinedTags.filter(t => t && t.trim()))];
+                        // 僅使用批量設定的標籤 (batchTags)，忽略 AI 回傳的標籤，並移除 "AI解析" 標籤
+                        const finalTags = [...new Set((batchTags || []).filter(t => t && t.trim()))];
                         
                         return {
                             id: 'ai_task_' + now + '_' + index + '_' + Math.random().toString(36).substr(2,5),
@@ -1556,7 +1553,7 @@ ${text}
                             serial: (item.serial || "").replace(/\s/g, ''),
                             expiry: item.expiry || '',
                             productName: finalName,
-                            tags: finalTags,
+                            tags: finalTags, // 僅使用 batchTags
                             images: pendingImages || [],
                             image: pendingMainImage || (pendingImages.length > 0 ? pendingImages[0] : ''),
                             completed: false,
@@ -1600,7 +1597,8 @@ ${text}
                         results.push({
                             ...item,
                             createdAt: createdTimestamp,
-                            tags: batchTags.length > 0 ? batchTags : item.tags,
+                            // 修正：傳統 Regex 解析也只使用 batchTags
+                            tags: batchTags, // 只使用批量設定的標籤
                         });
                     });
                 } else {
@@ -2209,7 +2207,7 @@ ${text}
             const [previewImage, setPreviewImage] = useState(null);
 
             const [isSelectionMode, setIsSelectionMode] = useState(false);
-            const [selectedTasks, setSelectedTasks] = useState(new Set());
+            const [selectedTasks, setSelectedTasks] = new useState(new Set());
             const [showTagManager, setShowTagManager] = useState(false);
             const [showPresetManager, setShowPresetManager] = useState(false);
             const [showDataTools, setShowDataTools] = useState(false);
@@ -2742,7 +2740,7 @@ ${text}
                             <div className="flex items-center gap-2 flex-shrink-0">
                                 <div className="flex items-center gap-1 bg-amber-50 dark:bg-amber-900/20 px-2 py-1 rounded-md border border-amber-100 dark:border-amber-800/30">
                                     <Clock size={12} className="text-amber-500" />
-                                    <select value={expiryThreshold} onChange={(e) => setExpiryThreshold(parseInt(e.target.value))} className="bg-transparent outline-none font-bold text-amber-800 dark:text-amber-500 text-[10px]"><option value="7">7天</option><option value="14">14天</option><option value="30">30天</option><option value="180">半年</option></select>
+                                    <select value={expiryThreshold} onChange={(e) => setExpiryThreshold(parseInt(e.target.value))} className="bg-transparent outline-none font-bold text-amber-800 dark:text-amber-500 text-[10px]"><option value="7">7天</option><option value="14">14天</option><option value="30">30天</option><option value="90">90天</option></select>
                                 </div>
                                 <select value={sortType} onChange={(e)=>setSortType(e.target.value)} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 text-xs rounded-lg py-1.5 px-2 outline-none font-bold">
                                     <option value="expiring">快到期</option><option value="newest">最新</option><option value="oldest">最早</option>
