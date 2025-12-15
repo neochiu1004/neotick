@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V3.2 AI 標籤邏輯修正版)</title>
+    <title>離線票券管家 (V3.2 UI 修訂版)</title>
 
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -679,7 +679,7 @@ ${text}
             );
         };
 
-        const TagManagerModal = ({ isOpen, onClose, tags, onAddTag, onDeleteTag, onRenameTag }) => {
+        const TagManagerModal = ({ isOpen, onClose, tags, onAddTag, onDeleteTag, onRenameTag, onSelectTag }) => {
             const [newTag, setNewTag] = useState('');
             const [editingTag, setEditingTag] = useState(null);
             const [editValue, setEditValue] = useState('');
@@ -698,7 +698,18 @@ ${text}
                                     {editingTag === tag ? (
                                         <div className="flex gap-2 flex-1 items-center"><input type="text" value={editValue} onChange={(e) => setEditValue(e.target.value)} className="flex-1 bg-white dark:bg-slate-600 px-2 py-1 rounded border border-blue-300 outline-none text-sm dark:text-white" autoFocus /><button onClick={saveEdit} className="text-green-600 hover:bg-green-50 p-1 rounded"><Check size={16}/></button><button onClick={() => setEditingTag(null)} className="text-slate-400 hover:bg-slate-100 p-1 rounded"><X size={16}/></button></div>
                                     ) : (
-                                        <><span className="text-slate-700 dark:text-slate-200 font-medium text-sm pl-1">{tag}</span><div className="flex gap-1"><button onClick={() => startEdit(tag)} className="text-slate-400 hover:text-blue-600 p-1.5 hover:bg-blue-50 dark:hover:bg-slate-600 rounded"><Pencil size={14}/></button><button onClick={() => { if(confirm(`確定刪除標籤「${tag}」嗎？所有使用此標籤的票券會同步移除此標籤。`)) onDeleteTag(tag); }} className="text-slate-400 hover:text-red-600 p-1.5 hover:bg-red-50 dark:hover:bg-slate-600 rounded"><Trash2 size={14}/></button></div></>
+                                        <>
+                                            <span 
+                                                onClick={() => onSelectTag && onSelectTag(tag)} // 點擊套用標籤
+                                                className={`text-slate-700 dark:text-slate-200 font-medium text-sm pl-1 truncate ${onSelectTag ? 'cursor-pointer hover:text-blue-500 dark:hover:text-blue-300 transition-colors' : ''}`}
+                                            >
+                                                {tag}
+                                            </span>
+                                            <div className="flex gap-1">
+                                                <button onClick={() => startEdit(tag)} className="text-slate-400 hover:text-blue-600 p-1.5 hover:bg-blue-50 dark:hover:bg-slate-600 rounded"><Pencil size={14}/></button>
+                                                <button onClick={() => { if(confirm(`確定刪除標籤「${tag}」嗎？所有使用此標籤的票券會同步移除此標籤。`)) onDeleteTag(tag); }} className="text-slate-400 hover:text-red-600 p-1.5 hover:bg-red-50 dark:hover:bg-slate-600 rounded"><Trash2 size={14}/></button>
+                                            </div>
+                                        </>
                                     )}
                                 </div>
                             ))}
@@ -708,7 +719,7 @@ ${text}
             );
         };
 
-        const PresetManagerModal = ({ isOpen, onClose, presets, onAddPreset, onDeletePreset }) => {
+        const PresetManagerModal = ({ isOpen, onClose, presets, onAddPreset, onDeletePreset, onSelectPreset }) => {
             const [newPreset, setNewPreset] = useState('');
             if (!isOpen) return null;
 
@@ -720,7 +731,12 @@ ${text}
                         <div className="max-h-[300px] overflow-y-auto space-y-2 pr-1 custom-scrollbar">
                             {presets.length === 0 ? <p className="text-slate-400 text-sm text-center py-8">尚無常用資料</p> : presets.map(name => (
                                 <div key={name} className="flex justify-between items-center bg-slate-50 dark:bg-slate-700/50 p-2.5 rounded-lg border border-slate-100 dark:border-slate-700 group">
-                                    <span className="text-slate-700 dark:text-slate-200 font-medium text-sm pl-1 truncate">{name}</span>
+                                    <span 
+                                        onClick={() => onSelectPreset && onSelectPreset(name)} // 點擊套用名稱
+                                        className={`text-slate-700 dark:text-slate-200 font-medium text-sm pl-1 truncate ${onSelectPreset ? 'cursor-pointer hover:text-purple-500 dark:hover:text-purple-300 transition-colors' : ''}`}
+                                    >
+                                        {name}
+                                    </span>
                                     <button onClick={() => { if(confirm(`確定刪除「${name}」嗎？`)) onDeletePreset(name); }} className="text-slate-400 hover:text-red-600 p-1.5 hover:bg-red-50 dark:hover:bg-slate-600 rounded"><Trash2 size={14}/></button>
                                 </div>
                             ))}
@@ -733,7 +749,8 @@ ${text}
         // --- New Component: Multi-Tag Selector (for Edit/Add Modals) ---
         const TagSelectInput = ({ allTags, selectedTags, onTagsChange, onManageTags }) => {
             const [inputValue, setInputValue] = useState('');
-            const availableTags = allTags.filter(t => !selectedTags.includes(t));
+            // 移除 datalist，讓用戶手動輸入或通過管理員設定
+            // const availableTags = allTags.filter(t => !selectedTags.includes(t)); 
 
             const handleAddTag = (tag) => {
                 const t = tag.trim();
@@ -770,16 +787,15 @@ ${text}
 
                     <div className="flex gap-1 items-center">
                         <input
-                            list="available-tags-input"
+                            // 移除 list="available-tags-input"
                             value={inputValue}
                             onChange={e => setInputValue(e.target.value)}
                             onKeyDown={handleKeyDown}
-                            placeholder="新增標籤 (輸入或選擇)..."
+                            placeholder="新增標籤 (輸入或點擊右方管理按鈕套用)"
                             className="flex-1 px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white"
                         />
-                        <datalist id="available-tags-input">
-                            {availableTags.map(t => <option key={t} value={t} />)}
-                        </datalist>
+                        {/* 移除 datalist 區塊 */}
+                        
                         <button
                             onClick={() => handleAddTag(inputValue)}
                             disabled={!inputValue.trim()}
@@ -791,7 +807,7 @@ ${text}
                         <button
                             onClick={onManageTags}
                             className="p-2 bg-slate-100 dark:bg-slate-700 text-blue-600 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
-                            title="管理標籤庫"
+                            title="管理標籤庫 (點擊標籤可套用)"
                         >
                             <FolderPlus size={16}/>
                         </button>
@@ -800,7 +816,7 @@ ${text}
             );
         };
         // --- Batch Edit Panel Component ---
-        const BatchEditPanel = ({ selectedCount, tags, onUpdateName, onUpdateDate, onUpdateImage, onBatchAddTag, onClose, gallery, onAddToGallery, onManageTags, onManagePresets, presetNames }) => {
+        const BatchEditPanel = ({ selectedCount, tags, onUpdateName, onUpdateDate, onUpdateImage, onBatchAddTag, onClose, gallery, onAddToGallery, onManageTags, onManagePresets, presetNames, setCurrentNameSetter, setCurrentTagAdder }) => {
             const [name, setName] = useState('');
             const [expiry, setExpiry] = useState('');
             const [newTag, setNewTag] = useState(''); // Only supports adding one tag at a time
@@ -816,6 +832,18 @@ ${text}
                 }
             };
 
+            const handleOpenNameManager = () => {
+                setCurrentNameSetter(() => setName);
+                onManagePresets();
+            };
+
+            const handleOpenTagManager = () => {
+                 // TagAdder 函數：將標籤添加到 newTag 輸入框中 (單一設定)
+                setCurrentTagAdder(() => (tag) => setNewTag(tag));
+                onManageTags();
+            };
+
+
             return (
                 <div className="fixed bottom-[70px] left-4 right-4 bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 z-50 animate-in p-4 flex flex-col gap-3">
                     <div className="flex justify-between items-center border-b dark:border-slate-700 pb-2">
@@ -826,20 +854,18 @@ ${text}
                         <button onClick={onClose} className="bg-slate-100 dark:bg-slate-700 rounded-full p-1"><X size={16}/></button>
                     </div>
 
-                    {/* 批量修改名稱 (支援名稱庫, 可輸入可選) */}
+                    {/* 批量修改名稱 */}
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
                             <input
-                                list="preset-names-batch-edit" // 允許手動輸入或從名稱庫選擇
+                                // 移除 list="preset-names-batch-edit"
                                 value={name}
                                 onChange={e=>setName(e.target.value)}
-                                placeholder="統一修改名稱 (可手動輸入或選擇)..."
+                                placeholder="統一修改名稱..."
                                 className="flex-1 bg-slate-50 dark:bg-slate-900 border dark:border-slate-700 rounded-lg px-2 py-1.5 text-sm dark:text-white"
                             />
-                            <datalist id="preset-names-batch-edit">
-                                {presetNames.map(name => <option key={name} value={name} />)}
-                            </datalist>
-                            <button onClick={onManagePresets} className="px-2 bg-slate-100 dark:bg-slate-700 text-purple-600 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors" title="管理常用品名"><BookOpen size={16}/></button>
+                            {/* 移除 datalist */}
+                            <button onClick={handleOpenNameManager} className="px-2 bg-slate-100 dark:bg-slate-700 text-purple-600 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors" title="管理常用品名 (點擊名稱可套用)"><BookOpen size={16}/></button>
                             <button onClick={()=>name.trim() && onUpdateName(name)} disabled={!name.trim()} className="bg-blue-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">改名</button>
                         </div>
                     </div>
@@ -857,20 +883,18 @@ ${text}
                         </div>
                     </div>
 
-                    {/* 批量新增標籤 (取代舊的單一修改分類) */}
+                    {/* 批量新增標籤 */}
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
                             <input
-                                list="tag-names-batch-edit" // 允許手動輸入或從標籤庫選擇
+                                // 移除 list="tag-names-batch-edit"
                                 value={newTag}
                                 onChange={e=>setNewTag(e.target.value)}
-                                placeholder="批量新增標籤 (可手動輸入或選擇)..."
+                                placeholder="批量新增標籤..."
                                 className="flex-1 bg-slate-50 dark:bg-slate-900 border dark:border-slate-700 rounded-lg px-2 py-1.5 text-sm dark:text-white"
                             />
-                            <datalist id="tag-names-batch-edit">
-                                {tags.map(t=><option key={t} value={t}>{t}</option>)}
-                            </datalist>
-                            <button onClick={onManageTags} className="px-2 bg-slate-100 dark:bg-slate-700 text-blue-600 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors" title="管理標籤"><FolderPlus size={16}/></button>
+                            {/* 移除 datalist */}
+                            <button onClick={handleOpenTagManager} className="px-2 bg-slate-100 dark:bg-slate-700 text-blue-600 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors" title="管理標籤 (點擊標籤可套用)"><FolderPlus size={16}/></button>
                             <button onClick={() => { if(newTag.trim()) { onBatchAddTag(newTag.trim()); setNewTag(''); } }} disabled={!newTag.trim()} className="bg-green-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">新增標籤</button>
                         </div>
                     </div>
@@ -901,7 +925,7 @@ ${text}
             );
         };
 
-        const TaskItem = ({ task, tags, onToggle, onDelete, onRestore, onPermanentDelete, onUpdateTicket, isSelectionMode, isSelected, onSelect, expiryThreshold, isDuplicate, isDarkMode, onManageTags, onPreviewImage, gallery, onAddToGallery, presetNames, onManagePresets, onToggleTag }) => {
+        const TaskItem = ({ task, tags, onToggle, onDelete, onRestore, onPermanentDelete, onUpdateTicket, isSelectionMode, isSelected, onSelect, expiryThreshold, isDuplicate, isDarkMode, onManageTags, onPreviewImage, gallery, onAddToGallery, presetNames, onManagePresets, onToggleTag, setCurrentNameSetter, setCurrentTagAdder }) => {
             const [showCodes, setShowCodes] = useState(false);
             const [justCopied, setJustCopied] = useState(false);
             const [isEditing, setIsEditing] = useState(false);
@@ -1026,6 +1050,23 @@ ${text}
                 }
             };
 
+            // Helpers for Click-to-Apply
+            const handleAddTagFromManager = (tag) => {
+                if (!editTags.includes(tag)) {
+                    setEditTags(prev => [...prev, tag]);
+                }
+            };
+
+            const handleOpenNameManager = () => {
+                setCurrentNameSetter(() => setEditName);
+                onManagePresets();
+            };
+            
+            const handleOpenTagManager = () => {
+                setCurrentTagAdder(() => handleAddTagFromManager);
+                onManageTags();
+            };
+            
             if (isEditing) {
                 return (
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl border-2 border-blue-500 p-4 mb-3 space-y-3 relative z-20 animate-in" onClick={e => e.stopPropagation()}>
@@ -1035,17 +1076,15 @@ ${text}
                             <div className="flex-1">
                                 <label className="text-xs text-slate-400">品名</label>
                                 <input
-                                    list={`preset-names-edit-${task.id}`}
+                                    // 移除 list={`preset-names-edit-${task.id}`}
                                     className="w-full bg-slate-50 dark:bg-slate-700 border-b border-slate-200 dark:border-slate-600 p-1 text-lg font-bold outline-none dark:text-white"
                                     value={editName}
                                     onChange={e=>setEditName(e.target.value)}
-                                    placeholder="輸入或選擇..."
+                                    placeholder="輸入品名..."
                                 />
-                                <datalist id={`preset-names-edit-${task.id}`}>
-                                    {presetNames.map(name => <option key={name} value={name} />)}
-                                </datalist>
+                                {/* 移除 datalist */}
                             </div>
-                            <button onClick={onManagePresets} className="p-2 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded border border-purple-200 mb-1"><BookOpen size={16}/></button>
+                            <button onClick={handleOpenNameManager} className="p-2 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded border border-purple-200 mb-1" title="管理常用品名 (點擊名稱可套用)"><BookOpen size={16}/></button>
                         </div>
 
                         {/* Multi-Tag Editor for Edit Modal */}
@@ -1055,7 +1094,7 @@ ${text}
                                 allTags={tags}
                                 selectedTags={editTags}
                                 onTagsChange={setEditTags}
-                                onManageTags={onManageTags}
+                                onManageTags={handleOpenTagManager} // 使用自訂的 Tag Manager 處理套用邏輯
                             />
                         </div>
 
@@ -1455,7 +1494,7 @@ ${text}
             </div>
         );
 
-        const AddTaskModal = ({ isOpen, onClose, onAddBatch, tags, onManageTags, gallery, onAddToGallery, presetNames, onManagePresets, geminiApiKey }) => {
+        const AddTaskModal = ({ isOpen, onClose, onAddBatch, tags, onManageTags, gallery, onAddToGallery, presetNames, onManagePresets, geminiApiKey, setCurrentNameSetter, setCurrentTagAdder }) => {
             const [mode, setMode] = useState('paste');
             const [pasteVal, setPasteVal] = useState('');
             const [batchName, setBatchName] = useState('');
@@ -1515,6 +1554,36 @@ ${text}
                 onAddToGallery(img);
                 alert("已加入圖庫！");
             };
+
+            // Helpers for Click-to-Apply
+            const handleAddTagFromManager = (tag) => {
+                if (!batchTags.includes(tag)) {
+                    setBatchTags(prev => [...prev, tag]);
+                }
+            };
+            const handleOpenNameManagerPaste = () => {
+                setCurrentNameSetter(() => setBatchName);
+                onManagePresets();
+            };
+            const handleOpenTagManagerPaste = () => {
+                setCurrentTagAdder(() => handleAddTagFromManager);
+                onManageTags();
+            };
+
+            const handleOpenNameManagerManual = () => {
+                setCurrentNameSetter(() => setManualName);
+                onManagePresets();
+            };
+            const handleAddTagFromManagerManual = (tag) => {
+                if (!manualTags.includes(tag)) {
+                    setManualTags(prev => [...prev, tag]);
+                }
+            };
+            const handleOpenTagManagerManual = () => {
+                setCurrentTagAdder(() => handleAddTagFromManagerManual);
+                onManageTags();
+            };
+
 
             // --- AI Parsing Logic ---
             const handleAiParsing = async () => {
@@ -1728,30 +1797,29 @@ ${text}
                                 <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl border border-blue-100 dark:border-blue-800">
                                     <h3 className="text-xs font-bold text-blue-600 dark:text-blue-400 mb-2 flex items-center gap-1"><Layers size={12}/> 預設值 (強制套用至所有解析結果)</h3>
                                     <div className="space-y-2">
+                                        {/* 智慧輸入 - 名稱輸入 */}
                                         <div className="flex gap-2">
                                             <div className="flex-1">
                                                 <input
-                                                    list="preset-names-batch"
+                                                    // 移除 list="preset-names-batch"
                                                     value={batchName}
                                                     onChange={e=>setBatchName(e.target.value)}
                                                     placeholder="指定品名 (選填)"
                                                     className="w-full px-2 py-1.5 text-sm border rounded-lg outline-none bg-white dark:bg-slate-800 dark:border-slate-600 dark:text-white"
                                                 />
-                                                <datalist id="preset-names-batch">
-                                                    {presetNames.map(name => <option key={name} value={name} />)}
-                                                </datalist>
+                                                {/* 移除 datalist */}
                                             </div>
-                                            <button onClick={onManagePresets} className="px-2 bg-white dark:bg-slate-800 text-purple-600 rounded-lg border border-purple-200 hover:bg-purple-50 dark:border-slate-600"><BookOpen size={16}/></button>
+                                            <button onClick={handleOpenNameManagerPaste} className="px-2 bg-white dark:bg-slate-800 text-purple-600 rounded-lg border border-purple-200 hover:bg-purple-50 dark:border-slate-600" title="管理常用品名 (點擊名稱可套用)"><BookOpen size={16}/></button>
                                         </div>
 
-                                        {/* Batch Tags Input (Multi-select) */}
+                                        {/* 智慧輸入 - 標籤輸入 */}
                                         <div>
                                             <label className="text-xs text-slate-500 dark:text-slate-400 block mb-1">指定標籤 (選填，可多個)</label>
                                             <TagSelectInput
                                                 allTags={tags}
                                                 selectedTags={batchTags}
                                                 onTagsChange={setBatchTags}
-                                                onManageTags={onManageTags}
+                                                onManageTags={handleOpenTagManagerPaste}
                                             />
                                         </div>
                                         <p className="text-[10px] text-slate-500 dark:text-slate-400">* 若設定品名，將忽略智慧辨識到的名稱。</p>
@@ -1771,17 +1839,15 @@ ${text}
                                 <div className="flex gap-2 items-end">
                                     <div className="flex-1">
                                         <input
-                                            list="preset-names"
+                                            // 移除 list="preset-names"
                                             value={manualName}
                                             onChange={e=>setManualName(e.target.value)}
-                                            placeholder="品名 (必填，可選或輸入)"
+                                            placeholder="品名 (必填)"
                                             className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none font-bold dark:text-white"
                                         />
-                                        <datalist id="preset-names">
-                                            {presetNames.map(name => <option key={name} value={name} />)}
-                                        </datalist>
+                                        {/* 移除 datalist */}
                                     </div>
-                                    <button onClick={onManagePresets} className="p-3 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded-xl border border-purple-200"><BookOpen size={18}/></button>
+                                    <button onClick={handleOpenNameManagerManual} className="p-3 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded-xl border border-purple-200" title="管理常用品名 (點擊名稱可套用)"><BookOpen size={18}/></button>
                                 </div>
 
                                 {/* Manual Tags Input (Multi-select) */}
@@ -1791,7 +1857,7 @@ ${text}
                                         allTags={tags}
                                         selectedTags={manualTags}
                                         onTagsChange={setManualTags}
-                                        onManageTags={onManageTags}
+                                        onManageTags={handleOpenTagManagerManual}
                                     />
                                 </div>
 
@@ -2213,6 +2279,10 @@ ${text}
             const [showDataTools, setShowDataTools] = useState(false);
 
             const [showBatchEditPanel, setShowBatchEditPanel] = useState(false);
+
+            // --- 新增：管理介面套用狀態 ---
+            const [currentNameSetter, setCurrentNameSetter] = useState(null); // (name: string) => void
+            const [currentTagAdder, setCurrentTagAdder] = useState(null);   // (tag: string) => void
 
             const menuRef = useRef(null);
             const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -2794,6 +2864,8 @@ ${text}
                                                     onManageTags={() => setShowTagManager(true)}
                                                     onPreviewImage={(src) => setPreviewImage(src)}
                                                     onToggleTag={handleToggleTag}
+                                                    setCurrentNameSetter={setCurrentNameSetter}
+                                                    setCurrentTagAdder={setCurrentTagAdder}
                                                 />
                                             ))}
                                         </div>
@@ -2823,6 +2895,8 @@ ${text}
                         presetNames={presetNames}
                         onManagePresets={() => setShowPresetManager(true)}
                         geminiApiKey={geminiApiKey} // Pass API Key
+                        setCurrentNameSetter={setCurrentNameSetter}
+                        setCurrentTagAdder={setCurrentTagAdder}
                     />
 
                     {/* Batch Edit Panel (Modified Logic) */}
@@ -2840,18 +2914,40 @@ ${text}
                             onManagePresets={() => setShowPresetManager(true)}
                             presetNames={presetNames}
                             onClose={() => setShowBatchEditPanel(false)}
+                            setCurrentNameSetter={setCurrentNameSetter}
+                            setCurrentTagAdder={setCurrentTagAdder}
                         />
                     )}
 
                     <TagManagerModal
                         isOpen={showTagManager}
-                        onClose={() => setShowTagManager(false)}
+                        onClose={() => { setShowTagManager(false); setCurrentTagAdder(null); }}
                         tags={tags}
                         onAddTag={(t)=>{if(!tags.includes(t)) setTags([...tags,t])}}
                         onDeleteTag={handleTagDelete} // Uses new global deletion logic
                         onRenameTag={handleTagRename} // Uses new global rename logic
+                        onSelectTag={(tag) => {
+                            if (currentTagAdder) {
+                                currentTagAdder(tag);
+                                setShowTagManager(false);
+                                setCurrentTagAdder(null);
+                            }
+                        }}
                     />
-                    <PresetManagerModal isOpen={showPresetManager} onClose={() => setShowPresetManager(false)} presets={presetNames} onAddPreset={(n)=>{if(!presetNames.includes(n)) setPresetNames([...presetNames,n])}} onDeletePreset={(n)=>{setPresetNames(presetNames.filter(x=>x!==n))}} />
+                    <PresetManagerModal 
+                        isOpen={showPresetManager} 
+                        onClose={() => { setShowPresetManager(false); setCurrentNameSetter(null); }} 
+                        presets={presetNames} 
+                        onAddPreset={(n)=>{if(!presetNames.includes(n)) setPresetNames([...presetNames,n])}} 
+                        onDeletePreset={(n)=>{setPresetNames(presetNames.filter(x=>x!==n))}} 
+                        onSelectPreset={(name) => {
+                            if (currentNameSetter) {
+                                currentNameSetter(name);
+                                setShowPresetManager(false);
+                                setCurrentNameSetter(null);
+                            }
+                        }}
+                    />
                     {showDataTools && <DataToolsModal isOpen={showDataTools} onClose={() => setShowDataTools(false)} tasks={tasks} onRestore={handleBatchRestore} onFullExport={handleExportTasks}/>}
                     {showSettings && <SettingsModal 
                         isOpen={showSettings} 
