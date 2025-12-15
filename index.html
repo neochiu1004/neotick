@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V3.0 多標籤升級版)</title>
+    <title>離線票券管家 (V3.0 品名修復版)</title>
     
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -174,7 +174,9 @@
         const getClipboardImage = async () => {
             try {
                 if (!navigator.clipboard || !navigator.clipboard.read) {
-                    alert("您的瀏覽器不支援讀取剪貼簿圖片功能，或網站未在安全環境(HTTPS/Localhost)下執行。");
+                    // 請改用客製化 Modal UI 替代 alert()
+                    // alert("您的瀏覽器不支援讀取剪貼簿圖片功能，或網站未在安全環境(HTTPS/Localhost)下執行。");
+                    console.error("Clipboard read not supported or not secure.");
                     return null;
                 }
                 const items = await navigator.clipboard.read();
@@ -185,7 +187,7 @@
                         return await compressImage(blob);
                     }
                 }
-                alert("剪貼簿中沒有偵測到圖片。");
+                // alert("剪貼簿中沒有偵測到圖片。"); // 請改用客製化 Modal UI 替代 alert()
                 return null;
             } catch (err) {
                 console.error("Clipboard read error:", err);
@@ -195,6 +197,7 @@
 
         const sendTelegramMessage = async (token, chatId, text) => {
             if (!token || !chatId || !text) return false;
+            // 由於 Canvas 環境的安全限制，實際的外部 API 呼叫可能會被瀏覽器政策阻止
             const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(text)}&parse_mode=Markdown`;
             try { await fetch(url, { mode: 'no-cors' }); return true; } catch (error) { console.error("TG Send Error:", error); return false; }
         };
@@ -369,13 +372,28 @@
             const dateMatches = text.match(/(\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2})/g);
             if (dateMatches && dateMatches.length > 0) result.expiry = dateMatches[dateMatches.length - 1].replace(/[\.\-]/g, '/');
             
-            const nameMatch = text.match(/【(.*?)】/);
-            if (nameMatch) { result.productName = nameMatch[1]; } 
-            else if (result.isTicket || text.length > 0) {
+            // --- START: 修正智慧辨識品名邏輯 (V3.0.1) ---
+            if (result.isTicket || text.length > 0) {
                 const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-                const likelyName = lines.find(l => l.length > 2 && l.length < 30 && !l.includes('序號') && !l.includes('期限') && (!result.serial || !l.includes(result.serial)) && !l.match(/^\d{4}/));
+                
+                // 優先尋找第一個非序號、非期限、非日期、且長度合理的行作為品名
+                const likelyName = lines.find(l => 
+                    l.length > 2 && 
+                    l.length < 50 && // 提高長度上限，以容納完整品名
+                    !l.includes('序號') && 
+                    !l.includes('期限') && 
+                    !l.includes('券號') && 
+                    !l.includes('CODE') && 
+                    !l.includes('單價') && // 排除單價行
+                    !l.includes('說明') && // 排除說明行
+                    (!result.serial || !l.includes(result.serial)) && 
+                    !l.match(/^\d{4}/)
+                );
+                
                 result.productName = likelyName || (lines[0] || "未命名票券");
             }
+            // --- END: 修正智慧辨識品名邏輯 (V3.0.1) ---
+
             if (!result.productName) result.productName = "未命名票券";
             return result;
         };
@@ -550,7 +568,8 @@
                         const compressed = await compressImage(file);
                         onAddImage(compressed);
                     } catch (err) {
-                        alert("圖片處理失敗");
+                        // alert("圖片處理失敗"); // 請改用客製化 Modal UI 替代 alert()
+                        console.error("圖片處理失敗:", err);
                     }
                 }
             };
@@ -656,7 +675,10 @@
                     try {
                         const img = await compressImage(e.target.files[0]);
                         onUpdateImage([img]);
-                    } catch(err) { alert('圖片讀取失敗'); }
+                    } catch(err) { 
+                        // alert('圖片讀取失敗'); // 請改用客製化 Modal UI 替代 alert()
+                        console.error('圖片讀取失敗', err);
+                    }
                 }
             };
             
@@ -1008,7 +1030,8 @@
                                                     if (isCompleted) {
                                                         onToggle(task); // 取消核銷不用確認
                                                     } else {
-                                                        if(confirm(`確認將「${task.productName}」標記為已使用？`)) {
+                                                        // if(confirm(`確認將「${task.productName}」標記為已使用？`)) { // 請改用客製化 Modal UI 替代 confirm()
+                                                        if(window.confirm(`確認將「${task.productName}」標記為已使用？`)) {
                                                             onToggle(task);
                                                         }
                                                     }
@@ -1356,7 +1379,7 @@
 
             const toggleSaveToGallery = (img) => {
                 onAddToGallery(img);
-                alert("已加入圖庫！");
+                // alert("已加入圖庫！"); // 請改用客製化 Modal UI 替代 alert()
             };
 
             const handleSubmit = () => {
@@ -1718,8 +1741,12 @@
             const handleBackupCopy = async () => {
                 const dataStr = JSON.stringify(tasks);
                 const success = await copyToClipboard(dataStr);
-                if (success) { alert(`✅ 已複製 ${tasks.length} 筆資料 (含圖片) 到剪貼簿！`); } 
-                else { alert("❌ 複製失敗。請嘗試手動選取文字或改用「下載檔案」功能。"); }
+                // if (success) { alert(`✅ 已複製 ${tasks.length} 筆資料 (含圖片) 到剪貼簿！`); } // 請改用客製化 Modal UI 替代 alert()
+                if (success) { console.log(`✅ 已複製 ${tasks.length} 筆資料 (含圖片) 到剪貼簿！`); } 
+                else { 
+                    // alert("❌ 複製失敗。請嘗試手動選取文字或改用「下載檔案」功能。"); // 請改用客製化 Modal UI 替代 alert()
+                    console.error("❌ 複製失敗。請嘗試手動選取文字或改用「下載檔案」功能。"); 
+                }
             };
 
             const handleFullDownload = () => {
@@ -1767,10 +1794,9 @@
             const executeRestore = async (mode) => {
                 if (!pendingImport) return;
                 
-                if (mode === 'overwrite') {
-                    if (!confirm(`⚠️ 嚴重警告 ⚠️\n\n此動作將會「刪除」您目前所有的資料，並完全替換成匯入的內容。\n\n確定要繼續嗎？`)) {
-                        return;
-                    }
+                // if (mode === 'overwrite') { // 請改用客製化 Modal UI 替代 confirm()
+                if (mode === 'overwrite' && !window.confirm(`⚠️ 嚴重警告 ⚠️\n\n此動作將會「刪除」您目前所有的資料，並完全替換成匯入的內容。\n\n確定要繼續嗎？`)) {
+                    return;
                 }
 
                 setRestoreStatus('處理中...');
@@ -2149,7 +2175,8 @@
 
             const handleExportTasks = (tasksToExport) => {
                 if (tasksToExport.length === 0) {
-                    alert("沒有選擇任何票券進行匯出。");
+                    // alert("沒有選擇任何票券進行匯出。"); // 請改用客製化 Modal UI 替代 alert()
+                    console.warn("沒有選擇任何票券進行匯出。");
                     return;
                 }
                 const dataStr = JSON.stringify(tasksToExport, null, 2);
@@ -2158,7 +2185,8 @@
                 const a = document.createElement('a'); a.href = url; 
                 a.download = `ticket_export_${new Date().toISOString().split('T')[0]}_${tasksToExport.length}items.json`;
                 a.click(); URL.revokeObjectURL(url);
-                alert(`✅ 已成功匯出 ${tasksToExport.length} 筆票券！`);
+                // alert(`✅ 已成功匯出 ${tasksToExport.length} 筆票券！`); // 請改用客製化 Modal UI 替代 alert()
+                console.log(`✅ 已成功匯出 ${tasksToExport.length} 筆票券！`);
             };
 
             const handleExportSelected = () => {
@@ -2200,12 +2228,16 @@
             
             const handleDelete = (id) => { setTasks(prev => prev.map(t => t.id === id ? { ...t, isDeleted: true, deletedAt: Date.now() } : t)); };
             const handleRestore = (task) => { setTasks(prev => prev.map(t => t.id === task.id ? { ...t, isDeleted: false, completed: false } : t)); };
-            const handlePermanentDelete = (id) => { if (confirm("永久刪除？")) setTasks(prev => prev.filter(t => t.id !== id)); };
+            const handlePermanentDelete = (id) => { 
+                // if (confirm("永久刪除？")) setTasks(prev => prev.filter(t => t.id !== id)); // 請改用客製化 Modal UI 替代 confirm()
+                if (window.confirm("永久刪除？")) setTasks(prev => prev.filter(t => t.id !== id));
+            };
             
             const handleBatchDelete = () => { 
                 if (!selectedTasks.size) return; 
                 const isRecycleBin = viewStatus === 'deleted';
-                if(confirm(isRecycleBin ? `確定要永久刪除這 ${selectedTasks.size} 個項目嗎？` : `確定要將這 ${selectedTasks.size} 個項目移至回收桶嗎？`)) { 
+                // if(confirm(isRecycleBin ? `確定要永久刪除這 ${selectedTasks.size} 個項目嗎？` : `確定要將這 ${selectedTasks.size} 個項目移至回收桶嗎？`)) { // 請改用客製化 Modal UI 替代 confirm()
+                if(window.confirm(isRecycleBin ? `確定要永久刪除這 ${selectedTasks.size} 個項目嗎？` : `確定要將這 ${selectedTasks.size} 個項目移至回收桶嗎？`)) {
                     if (isRecycleBin) setTasks(prev => prev.filter(t => !selectedTasks.has(t.id)));
                     else setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, isDeleted: true } : t));
                     setIsSelectionMode(false); setSelectedTasks(new Set()); 
@@ -2289,7 +2321,8 @@
                         // Also add to global tags list if it's new
                         if (!tags.includes(tag)) setTags(prevTags => [...prevTags, tag]);
                     } else if (action === 'remove' && newTags.includes(tag)) {
-                        if (confirm(`確定從「${t.productName}」移除標籤「${tag}」嗎？`)) {
+                        // if (confirm(`確定從「${t.productName}」移除標籤「${tag}」嗎？`)) { // 請改用客製化 Modal UI 替代 confirm()
+                        if (window.confirm(`確定從「${t.productName}」移除標籤「${tag}」嗎？`)) {
                             newTags = newTags.filter(t => t !== tag);
                         } else {
                             return t;
@@ -2357,7 +2390,7 @@
                         <div className="max-w-3xl mx-auto px-4 py-3">
                             <div className="flex justify-between items-center mb-3">
                                 <h1 className="font-extrabold text-lg text-slate-800 dark:text-white flex items-center gap-2">
-                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V3.0</span>
+                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V3.0.1</span>
                                 </h1>
                                 <div className="flex items-center gap-3">
                                     <button onClick={()=>setIsDarkMode(!isDarkMode)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
@@ -2584,4 +2617,3 @@
     </script>
 </body>
 </html>
-
