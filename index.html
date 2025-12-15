@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V3.0 品名修復版)</title>
-    
+    <title>離線票券管家 (V3.1 AI 整合版)</title>
+
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    
+
     <!-- 2. 引入 Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
@@ -39,6 +39,7 @@
                     animation: {
                         'pulse-red': 'pulse-red 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
                         'bounce-slight': 'bounce-slight 1s infinite',
+                        'spin-slow': 'spin 3s linear infinite',
                     },
                     keyframes: {
                         'pulse-red': {
@@ -67,7 +68,7 @@
         .ticket-card {
             position: relative;
             /* 預設變數，會在 JS 中根據深色模式切換 */
-            --card-bg: #ffffff; 
+            --card-bg: #ffffff;
             background: radial-gradient(circle at 0 2.5rem, transparent 0.75rem, var(--card-bg) 0.76rem) top left,
                         radial-gradient(circle at 100% 2.5rem, transparent 0.75rem, var(--card-bg) 0.76rem) top right;
             background-size: 51% 100%;
@@ -79,7 +80,7 @@
             --card-bg: #1e293b; /* slate-800 */
             filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
         }
-        
+
         .ticket-divider {
             border-top: 2px dashed #cbd5e1; /* slate-300 */
             margin: 0.5rem -1rem; /* Extend to edges */
@@ -89,7 +90,7 @@
         .dark .ticket-divider {
             border-color: #475569; /* slate-600 */
         }
-        
+
         /* 浮水印 */
         .watermark-used {
             position: absolute;
@@ -110,7 +111,7 @@
             color: rgba(255,255,255,0.05);
             border-color: rgba(255,255,255,0.05);
         }
-        
+
         /* Batch Edit Panel Animation */
         .batch-panel-enter { transform: translateY(100%); opacity: 0; }
         .batch-panel-enter-active { transform: translateY(0); opacity: 1; transition: all 0.3s cubic-bezier(0,0,0.2,1); }
@@ -119,36 +120,121 @@
     </style>
 </head>
 <body class="bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-100 transition-colors duration-300">
-    
+
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
         import React, { useState, useEffect, useMemo, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
-        import { 
-            Trash2, Calendar, Check, Plus, LogIn, ExternalLink, Tag, RotateCcw, 
-            CheckCircle2, ListTodo, Clock, StickyNote, Save, X, ScanBarcode, 
-            Pencil, ClipboardPaste, ArrowRightLeft, Copy, CheckSquare, Trash, 
+        import {
+            Trash2, Calendar, Check, Plus, LogIn, ExternalLink, Tag, RotateCcw,
+            CheckCircle2, ListTodo, Clock, StickyNote, Save, X, ScanBarcode,
+            Pencil, ClipboardPaste, ArrowRightLeft, Copy, CheckSquare, Trash,
             RefreshCcw, Search, FolderPlus, AlertCircle, MoreVertical, Copy as CopyIcon, Link as LinkIcon,
             Image as ImageIcon, Upload, Clipboard, ClipboardList, AlertTriangle, Download, FileJson, Database, FolderInput,
             LayoutDashboard, Moon, Sun, ChevronUp, ChevronDown, Filter, AlertOctagon, CheckSquare as CheckSquareIcon,
             Bell, BellRing, Send, UserCheck, CloudCog, Maximize2, Wand2, WifiOff, FileUp, Replace, FilePlus2, RefreshCw,
             ImagePlus, Heart, HeartHandshake, Eye, EyeOff, Globe, BookOpen, Star, History, MousePointerClick, Layers,
-            CalendarX2, CopyPlus
+            CalendarX2, CopyPlus, Lightbulb, Loader2
         } from 'lucide-react';
 
         // --- Helpers ---
+
+        /**
+         * 呼叫 Gemini API 進行票券資訊的 JSON 結構化解析。
+         * @param {string} text - 原始的票券文字內容 (簡訊/Email 內容等)。
+         * @param {string} apiKey - Google Gemini API Key。
+         * @returns {Promise<Array<{productName: string, serial: string, expiry: string, tags: string[], originalRaw: string}>>} - 解析後的票券陣列。
+         */
+        const callGeminiParsing = async (text, apiKey) => {
+            if (!apiKey) throw new Error("API Key 未設定。");
+            if (!text.trim()) throw new Error("請貼上要解析的文字。");
+
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+            const userQuery = `請解析以下文字內容，該內容可能包含一筆或多筆電子票券資訊，可能是簡訊、Email 內容或其他雜亂的文字。請找出所有的票券資訊並以 JSON Array 格式回傳。
+
+原始文字:
+---
+${text}
+---
+
+---
+格式要求 (請務必遵守):
+1. 僅回傳純 JSON Array 格式，不要包含任何 Markdown 符號 (如 \`\`\`json)。
+2. 每個物件代表一張票券。
+3. 欄位說明：
+   - productName: string, 票券品名或服務名稱。若內容有明顯品牌 (如星巴克、麥當勞)，請將品牌名包含在品名中。
+   - serial: string, 票券的兌換序號或代碼。必須是連續的英數字元，通常長度大於 8 碼。若無序號，請使用空字串 ""。
+   - expiry: string, 票券的有效期限。請統一轉換為 "YYYY/MM/DD" 格式。若無期限，請使用空字串 ""。
+   - tags: string[], 根據內容自動生成 1~2 個合適的中文標籤 (例如：星巴克 -> ["咖啡", "飲品"]；麥當勞 -> ["美食", "速食"])。
+   - originalRaw: string, 該票券資訊在原始文字中的完整段落或最相關句子，用於事後檢查。
+`;
+            
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: {
+                    parts: [{ text: "你是一個專業的電子票券資訊結構化助手。請嚴格根據用戶提供的文字和格式要求，提取並回傳 JSON 陣列。你的回覆只能是純 JSON 陣列，不包含任何額外說明或 Markdown 格式。" }]
+                },
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "ARRAY",
+                        items: {
+                            type: "OBJECT",
+                            properties: {
+                                "productName": { "type": "STRING" },
+                                "serial": { "type": "STRING" },
+                                "expiry": { "type": "STRING" },
+                                "tags": { 
+                                    "type": "ARRAY",
+                                    "items": { "type": "STRING" }
+                                },
+                                "originalRaw": { "type": "STRING" }
+                            },
+                            required: ["productName", "serial", "expiry", "tags", "originalRaw"]
+                        }
+                    }
+                }
+            };
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const errorBody = await response.text();
+                throw new Error(`Gemini API 呼叫失敗: ${response.status} - ${errorBody.substring(0, 100)}`);
+            }
+
+            const result = await response.json();
+            const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+            
+            if (!jsonText) {
+                throw new Error("Gemini 未回傳有效的 JSON 內容。");
+            }
+            
+            // 嘗試解析 JSON 文本
+            try {
+                return JSON.parse(jsonText);
+            } catch (e) {
+                console.error("JSON 解析錯誤:", e, "原始回傳文本:", jsonText);
+                throw new Error("AI 解析格式錯誤，無法轉換為有效的 JSON 陣列。");
+            }
+        };
+
         const compressImage = (fileOrUrl) => {
             return new Promise((resolve, reject) => {
                 const img = new Image();
-                img.crossOrigin = "Anonymous"; 
+                img.crossOrigin = "Anonymous";
                 img.onload = () => {
                     const canvas = document.createElement('canvas');
                     let width = img.width;
                     let height = img.height;
-                    const MAX_WIDTH = 800; 
+                    const MAX_WIDTH = 800;
                     const MAX_HEIGHT = 800;
-                    if (width > height) { if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } } 
+                    if (width > height) { if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } }
                     else { if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; } }
                     canvas.width = width; canvas.height = height;
                     const ctx = canvas.getContext('2d');
@@ -160,7 +246,7 @@
                     }
                 };
                 img.onerror = (err) => reject(err);
-                
+
                 if (typeof fileOrUrl === 'string') {
                     img.src = fileOrUrl;
                 } else {
@@ -174,9 +260,7 @@
         const getClipboardImage = async () => {
             try {
                 if (!navigator.clipboard || !navigator.clipboard.read) {
-                    // 請改用客製化 Modal UI 替代 alert()
-                    // alert("您的瀏覽器不支援讀取剪貼簿圖片功能，或網站未在安全環境(HTTPS/Localhost)下執行。");
-                    console.error("Clipboard read not supported or not secure.");
+                    alert("您的瀏覽器不支援讀取剪貼簿圖片功能，或網站未在安全環境(HTTPS/Localhost)下執行。");
                     return null;
                 }
                 const items = await navigator.clipboard.read();
@@ -187,7 +271,7 @@
                         return await compressImage(blob);
                     }
                 }
-                // alert("剪貼簿中沒有偵測到圖片。"); // 請改用客製化 Modal UI 替代 alert()
+                alert("剪貼簿中沒有偵測到圖片。");
                 return null;
             } catch (err) {
                 console.error("Clipboard read error:", err);
@@ -197,7 +281,6 @@
 
         const sendTelegramMessage = async (token, chatId, text) => {
             if (!token || !chatId || !text) return false;
-            // 由於 Canvas 環境的安全限制，實際的外部 API 呼叫可能會被瀏覽器政策阻止
             const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(text)}&parse_mode=Markdown`;
             try { await fetch(url, { mode: 'no-cors' }); return true; } catch (error) { console.error("TG Send Error:", error); return false; }
         };
@@ -208,7 +291,7 @@
             const lines = text.split(/\r?\n/);
             let currentNameCandidate = "";
             let foundAny = false;
-            let currentOrderer = ""; 
+            let currentOrderer = "";
 
             const cleanLine = (l) => l.trim();
 
@@ -226,30 +309,30 @@
                 if (dateMatch) {
                     dateStr = dateMatch[0].replace(/[\.\-]/g, '/');
                 }
-                
+
                 const lineWithoutDate = line.replace(/\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2}/, '');
-                
+
                 let serialStr = "";
                 const serialMatch = lineWithoutDate.match(/(?:券號|券號：|序號|CODE|Code|密碼|PIN)[:：\s]*([A-Za-z0-9\-\s]{8,})/i);
                 if (serialMatch && serialMatch[1]) {
-                    serialStr = serialMatch[1].trim().replace(/\s/g, ''); 
+                    serialStr = serialMatch[1].trim().replace(/\s/g, '');
                 } else {
                     const potentialCodes = lineWithoutDate.match(/[A-Za-z0-9]{9,30}/g);
                     if (potentialCodes) {
-                         const validCodes = potentialCodes.filter(code => 
-                            !/^20\d{6}$/.test(code) && 
-                            !/^\d{9,15}$/.test(code) && 
-                            (code.match(/[A-Za-z]/) || code.includes('-')) 
+                         const validCodes = potentialCodes.filter(code =>
+                            !/^20\d{6}$/.test(code) &&
+                            !/^\d{9,15}$/.test(code) &&
+                            (code.match(/[A-Za-z]/) || code.includes('-'))
                          );
                          if (validCodes.length > 0) {
                              serialStr = validCodes[0];
                          }
                     }
                 }
-                
+
                 if (serialStr) {
                     foundAny = true;
-                    
+
                     let finalName = "未命名票券";
                     if (overrideName && overrideName.trim()) {
                         finalName = overrideName.trim();
@@ -264,7 +347,7 @@
                     let note = "";
                     if (currentOrderer) {
                         note = `訂購人: ${currentOrderer}`;
-                        currentOrderer = ""; 
+                        currentOrderer = "";
                     }
 
                     results.push({
@@ -274,7 +357,7 @@
                         isTicket: true,
                         serial: serialStr,
                         productName: finalName,
-                        expiry: dateStr, 
+                        expiry: dateStr,
                         tags: overrideTags || [], // Changed to tags array
                         images: overrideImages || [],
                         image: (overrideImages && overrideImages.length > 0) ? overrideImages[0] : '',
@@ -284,9 +367,9 @@
                         note: note,
                         url: '',
                     });
-                    
-                    currentNameCandidate = ""; 
-                    
+
+                    currentNameCandidate = "";
+
                 } else if (dateStr) {
                     if (results.length > 0) {
                         const lastResult = results[results.length - 1];
@@ -305,7 +388,7 @@
                 const singleResult = parseTicketInfoV1(text);
                 const finalImages = (overrideImages && overrideImages.length > 0) ? overrideImages : [];
                 const finalImage = finalImages.length > 0 ? finalImages[0] : '';
-                
+
                 let fallbackNote = "";
                 const ordererMatch = text.match(/(?:訂購人|購買者)[:：\s]*([^,.\s\u0020]+)/i);
                 if (ordererMatch && ordererMatch[1]) {
@@ -353,12 +436,12 @@
         const parseTicketInfoV1 = (text) => {
             const result = { isTicket: false, serial: '', productName: '', expiry: '', originalText: text };
             const serialMatch = text.match(/(?:票券序號|序號|CODE|Code|密碼|PIN|券號)[:：\s]*([A-Za-z0-9\-\s]{8,})/i);
-            if (serialMatch) { 
+            if (serialMatch) {
                 const candidate = serialMatch[1].trim().replace(/\s/g, '');
-                if (candidate.length > 8 && !candidate.startsWith('202') && !candidate.includes('/')) { 
+                if (candidate.length > 8 && !candidate.startsWith('202') && !candidate.includes('/')) {
                     result.isTicket = true; result.serial = candidate;
                 }
-            } 
+            }
             if (!result.serial) {
                 const potentialCodes = text.match(/\b[A-Za-z0-9\-]{9,30}\b/g);
                 if (potentialCodes) {
@@ -371,29 +454,14 @@
             }
             const dateMatches = text.match(/(\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2})/g);
             if (dateMatches && dateMatches.length > 0) result.expiry = dateMatches[dateMatches.length - 1].replace(/[\.\-]/g, '/');
-            
-            // --- START: 修正智慧辨識品名邏輯 (V3.0.1) ---
-            if (result.isTicket || text.length > 0) {
+
+            const nameMatch = text.match(/【(.*?)】/);
+            if (nameMatch) { result.productName = nameMatch[1]; }
+            else if (result.isTicket || text.length > 0) {
                 const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-                
-                // 優先尋找第一個非序號、非期限、非日期、且長度合理的行作為品名
-                const likelyName = lines.find(l => 
-                    l.length > 2 && 
-                    l.length < 50 && // 提高長度上限，以容納完整品名
-                    !l.includes('序號') && 
-                    !l.includes('期限') && 
-                    !l.includes('券號') && 
-                    !l.includes('CODE') && 
-                    !l.includes('單價') && // 排除單價行
-                    !l.includes('說明') && // 排除說明行
-                    (!result.serial || !l.includes(result.serial)) && 
-                    !l.match(/^\d{4}/)
-                );
-                
+                const likelyName = lines.find(l => l.length > 2 && l.length < 30 && !l.includes('序號') && !l.includes('期限') && (!result.serial || !l.includes(result.serial)) && !l.match(/^\d{4}/));
                 result.productName = likelyName || (lines[0] || "未命名票券");
             }
-            // --- END: 修正智慧辨識品名邏輯 (V3.0.1) ---
-
             if (!result.productName) result.productName = "未命名票券";
             return result;
         };
@@ -406,7 +474,7 @@
             const today = new Date(); today.setHours(0, 0, 0, 0);
             const diffTime = expiryDate - today;
             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            return diffDays <= thresholdDays; 
+            return diffDays <= thresholdDays;
         };
 
         const getDaysRemaining = (expiryStr) => {
@@ -437,7 +505,7 @@
 
         const copyToClipboard = async (text) => {
             if (!text) return false;
-            try { await navigator.clipboard.writeText(text); return true; } 
+            try { await navigator.clipboard.writeText(text); return true; }
             catch (err) {
                 try {
                     const textArea = document.createElement("textarea"); textArea.value = text;
@@ -447,75 +515,6 @@
             }
         };
 
-        // --- New Component: Multi-Tag Selector (for Edit/Add Modals) ---
-        const TagSelectInput = ({ allTags, selectedTags, onTagsChange, onManageTags }) => {
-            const [inputValue, setInputValue] = useState('');
-            const availableTags = allTags.filter(t => !selectedTags.includes(t));
-
-            const handleAddTag = (tag) => {
-                const t = tag.trim();
-                if (t && !selectedTags.includes(t)) {
-                    onTagsChange([...selectedTags, t]);
-                    setInputValue('');
-                }
-            };
-
-            const handleRemoveTag = (tag) => {
-                onTagsChange(selectedTags.filter(t => t !== tag));
-            };
-
-            const handleKeyDown = (e) => {
-                if (e.key === 'Enter' && inputValue.trim()) {
-                    e.preventDefault();
-                    handleAddTag(inputValue);
-                }
-            };
-
-            return (
-                <div className="space-y-2">
-                    <div className="flex flex-wrap gap-2 mb-2">
-                        {selectedTags.map(tag => (
-                            <button 
-                                key={tag} 
-                                onClick={() => handleRemoveTag(tag)} 
-                                className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition-colors active:scale-95 shadow-sm"
-                            >
-                                {tag} <X size={10} className="text-white"/>
-                            </button>
-                        ))}
-                    </div>
-                    
-                    <div className="flex gap-1 items-center">
-                        <input 
-                            list="available-tags-input"
-                            value={inputValue}
-                            onChange={e => setInputValue(e.target.value)}
-                            onKeyDown={handleKeyDown}
-                            placeholder="新增標籤 (輸入或選擇)..."
-                            className="flex-1 px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white"
-                        />
-                        <datalist id="available-tags-input">
-                            {availableTags.map(t => <option key={t} value={t} />)}
-                        </datalist>
-                        <button 
-                            onClick={() => handleAddTag(inputValue)} 
-                            disabled={!inputValue.trim()}
-                            className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                            title="新增標籤"
-                        >
-                            <Plus size={16}/>
-                        </button>
-                        <button 
-                            onClick={onManageTags} 
-                            className="p-2 bg-slate-100 dark:bg-slate-700 text-blue-600 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
-                            title="管理標籤庫"
-                        >
-                            <FolderPlus size={16}/>
-                        </button>
-                    </div>
-                </div>
-            );
-        };
         // --- Components ---
         const QRCodeCanvas = ({ text, size = 150 }) => {
             const canvasRef = useRef(null);
@@ -528,7 +527,7 @@
             useEffect(() => { if (canvasRef.current && window.bwipjs) try { window.bwipjs.toCanvas(canvasRef.current, { bcid: 'code128', text: text, scale: 3, height: 10, includetext: true, textxalign: 'center' }); } catch (e) {} }, [text]);
             return <div className="flex flex-col items-center w-full p-2 bg-white rounded-lg border shadow-sm"><span className="text-[10px] text-gray-400 mb-1 uppercase tracking-wider">Barcode</span><canvas ref={canvasRef} className="max-w-full h-auto" /></div>;
         };
-        
+
         const ImagePreviewModal = ({ src, onClose, allImages }) => {
             if (!src) return null;
             return (
@@ -558,7 +557,7 @@
 
         const GalleryModal = ({ isOpen, onClose, images, onSelect, onDelete, onAddImage }) => {
             const fileInputRef = useRef(null);
-            
+
             if(!isOpen) return null;
 
             const handleFileSelect = async (e) => {
@@ -568,8 +567,7 @@
                         const compressed = await compressImage(file);
                         onAddImage(compressed);
                     } catch (err) {
-                        // alert("圖片處理失敗"); // 請改用客製化 Modal UI 替代 alert()
-                        console.error("圖片處理失敗:", err);
+                        alert("圖片處理失敗");
                     }
                 }
             };
@@ -613,12 +611,12 @@
 
         const TagManagerModal = ({ isOpen, onClose, tags, onAddTag, onDeleteTag, onRenameTag }) => {
             const [newTag, setNewTag] = useState('');
-            const [editingTag, setEditingTag] = useState(null); 
-            const [editValue, setEditValue] = useState(''); 
+            const [editingTag, setEditingTag] = useState(null);
+            const [editValue, setEditValue] = useState('');
             if (!isOpen) return null;
             const startEdit = (tag) => { setEditingTag(tag); setEditValue(tag); };
             const saveEdit = () => { if (editValue.trim() && editValue !== editingTag) { onRenameTag(editingTag, editValue.trim()); } setEditingTag(null); };
-            
+
             return (
                 <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4 animate-in">
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-slate-100 dark:border-slate-700">
@@ -643,7 +641,7 @@
         const PresetManagerModal = ({ isOpen, onClose, presets, onAddPreset, onDeletePreset }) => {
             const [newPreset, setNewPreset] = useState('');
             if (!isOpen) return null;
-            
+
             return (
                 <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4 animate-in">
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-slate-100 dark:border-slate-700">
@@ -661,11 +659,80 @@
                 </div>
             );
         };
-        
+
+        // --- New Component: Multi-Tag Selector (for Edit/Add Modals) ---
+        const TagSelectInput = ({ allTags, selectedTags, onTagsChange, onManageTags }) => {
+            const [inputValue, setInputValue] = useState('');
+            const availableTags = allTags.filter(t => !selectedTags.includes(t));
+
+            const handleAddTag = (tag) => {
+                const t = tag.trim();
+                if (t && !selectedTags.includes(t)) {
+                    onTagsChange([...selectedTags, t]);
+                    setInputValue('');
+                }
+            };
+
+            const handleRemoveTag = (tag) => {
+                onTagsChange(selectedTags.filter(t => t !== tag));
+            };
+
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter' && inputValue.trim()) {
+                    e.preventDefault();
+                    handleAddTag(inputValue);
+                }
+            };
+
+            return (
+                <div className="space-y-2">
+                    <div className="flex flex-wrap gap-2 mb-2">
+                        {selectedTags.map(tag => (
+                            <button
+                                key={tag}
+                                onClick={() => handleRemoveTag(tag)}
+                                className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition-colors active:scale-95 shadow-sm"
+                            >
+                                {tag} <X size={10} className="text-white"/>
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="flex gap-1 items-center">
+                        <input
+                            list="available-tags-input"
+                            value={inputValue}
+                            onChange={e => setInputValue(e.target.value)}
+                            onKeyDown={handleKeyDown}
+                            placeholder="新增標籤 (輸入或選擇)..."
+                            className="flex-1 px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white"
+                        />
+                        <datalist id="available-tags-input">
+                            {availableTags.map(t => <option key={t} value={t} />)}
+                        </datalist>
+                        <button
+                            onClick={() => handleAddTag(inputValue)}
+                            disabled={!inputValue.trim()}
+                            className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                            title="新增標籤"
+                        >
+                            <Plus size={16}/>
+                        </button>
+                        <button
+                            onClick={onManageTags}
+                            className="p-2 bg-slate-100 dark:bg-slate-700 text-blue-600 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+                            title="管理標籤庫"
+                        >
+                            <FolderPlus size={16}/>
+                        </button>
+                    </div>
+                </div>
+            );
+        };
         // --- Batch Edit Panel Component ---
         const BatchEditPanel = ({ selectedCount, tags, onUpdateName, onUpdateDate, onUpdateImage, onBatchAddTag, onClose, gallery, onAddToGallery, onManageTags, onManagePresets, presetNames }) => {
             const [name, setName] = useState('');
-            const [expiry, setExpiry] = useState(''); 
+            const [expiry, setExpiry] = useState('');
             const [newTag, setNewTag] = useState(''); // Only supports adding one tag at a time
             const [showGallery, setShowGallery] = useState(false);
             const fileInputRef = useRef(null);
@@ -675,13 +742,10 @@
                     try {
                         const img = await compressImage(e.target.files[0]);
                         onUpdateImage([img]);
-                    } catch(err) { 
-                        // alert('圖片讀取失敗'); // 請改用客製化 Modal UI 替代 alert()
-                        console.error('圖片讀取失敗', err);
-                    }
+                    } catch(err) { alert('圖片讀取失敗'); }
                 }
             };
-            
+
             return (
                 <div className="fixed bottom-[70px] left-4 right-4 bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 z-50 animate-in p-4 flex flex-col gap-3">
                     <div className="flex justify-between items-center border-b dark:border-slate-700 pb-2">
@@ -691,11 +755,11 @@
                         {/* 4. 批量修改後不會自動退出，手動點擊 X 關閉面板 */}
                         <button onClick={onClose} className="bg-slate-100 dark:bg-slate-700 rounded-full p-1"><X size={16}/></button>
                     </div>
-                    
+
                     {/* 批量修改名稱 (支援名稱庫, 可輸入可選) */}
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
-                            <input 
+                            <input
                                 list="preset-names-batch-edit" // 允許手動輸入或從名稱庫選擇
                                 value={name}
                                 onChange={e=>setName(e.target.value)}
@@ -709,11 +773,11 @@
                             <button onClick={()=>name.trim() && onUpdateName(name)} disabled={!name.trim()} className="bg-blue-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">改名</button>
                         </div>
                     </div>
-                    
+
                     {/* 批量修改期限 */}
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
-                            <input 
+                            <input
                                 type="date"
                                 value={expiry}
                                 onChange={e => setExpiry(e.target.value)}
@@ -726,7 +790,7 @@
                     {/* 批量新增標籤 (取代舊的單一修改分類) */}
                     <div className="flex gap-2 items-center">
                         <div className="flex-1 flex gap-1">
-                            <input 
+                            <input
                                 list="tag-names-batch-edit" // 允許手動輸入或從標籤庫選擇
                                 value={newTag}
                                 onChange={e=>setNewTag(e.target.value)}
@@ -740,7 +804,7 @@
                             <button onClick={() => { if(newTag.trim()) { onBatchAddTag(newTag.trim()); setNewTag(''); } }} disabled={!newTag.trim()} className="bg-green-600 disabled:opacity-50 text-white px-3 rounded-lg text-sm whitespace-nowrap">新增標籤</button>
                         </div>
                     </div>
-                    
+
                     {/* 批量圖片 */}
                     <div className="flex gap-2">
                          <button onClick={()=>fileInputRef.current.click()} className="flex-1 py-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-sm flex items-center justify-center gap-1 hover:bg-slate-200 dark:hover:bg-slate-600">
@@ -750,17 +814,17 @@
                              <ImagePlus size={14}/> 圖庫圖片
                          </button>
                     </div>
-                    
+
                     <input type="file" ref={fileInputRef} hidden accept="image/*" onChange={handleImageUpload}/>
-                    
+
                     {showGallery && (
-                        <GalleryModal 
-                            isOpen={showGallery} 
-                            onClose={()=>setShowGallery(false)} 
-                            images={gallery} 
-                            onSelect={(img)=>onUpdateImage([img])} 
-                            onAddImage={onAddToGallery} 
-                            onDelete={(idx)=> {const newG = [...gallery]; newG.splice(idx,1); onAddToGallery(newG, true);}} 
+                        <GalleryModal
+                            isOpen={showGallery}
+                            onClose={()=>setShowGallery(false)}
+                            images={gallery}
+                            onSelect={(img)=>onUpdateImage([img])}
+                            onAddImage={onAddToGallery}
+                            onDelete={(idx)=> {const newG = [...gallery]; newG.splice(idx,1); onAddToGallery(newG, true);}}
                         />
                     )}
                 </div>
@@ -772,7 +836,7 @@
             const [justCopied, setJustCopied] = useState(false);
             const [isEditing, setIsEditing] = useState(false);
             const [showRaw, setShowRaw] = useState(false);
-            
+
             useEffect(() => {
                 if (isSelectionMode && showCodes) {
                     setShowCodes(false);
@@ -783,10 +847,10 @@
             const [editName, setEditName] = useState(task.productName || task.text || '');
             const [editSerial, setEditSerial] = useState(task.serial || '');
             const [editExpiry, setEditExpiry] = useState(task.expiry || '');
-            const [editCreatedAt, setEditCreatedAt] = useState(''); 
+            const [editCreatedAt, setEditCreatedAt] = useState('');
             const [editNote, setEditNote] = useState(task.note || '');
             const [editTags, setEditTags] = useState(task.tags || []); // Changed to editTags (array)
-            
+
             // Image Editing (Multiple)
             const [editImages, setEditImages] = useState(task.images || (task.image ? [task.image] : []));
             const [editMainImage, setEditMainImage] = useState(task.image || '');
@@ -809,12 +873,12 @@
             const isCompleted = task.completed;
             const isDeleted = task.isDeleted;
             const isExpiring = !isCompleted && !isDeleted && task.expiry && checkIsExpiringSoon(task.expiry, expiryThreshold);
-            
+
             let cardClasses = `ticket-card w-full mb-3 transition-all duration-300 relative overflow-hidden group `;
-            
+
             if (isDeleted) cardClasses += 'opacity-70 grayscale ';
             if (isSelected) cardClasses += 'ring-2 ring-blue-500 transform scale-[1.01] ';
-            
+
             if (isDuplicate && !isDeleted) {
                 cardClasses += 'border-2 border-red-500 shadow-xl shadow-red-200 dark:shadow-red-900/40 animate-pulse-red z-10 ';
             } else if (isExpiring && !isDeleted) {
@@ -838,7 +902,7 @@
                 let newCreatedAt = task.createdAt;
                 if (editCreatedAt) {
                     const d = new Date(editCreatedAt);
-                    d.setHours(12,0,0,0); 
+                    d.setHours(12,0,0,0);
                     newCreatedAt = d.getTime();
                 }
 
@@ -866,7 +930,7 @@
                     }
                 }
             };
-            
+
             const handleAddFromGallery = (img) => {
                 setEditImages(prev => [...prev, img]);
                 if (!editMainImage) setEditMainImage(img);
@@ -896,14 +960,14 @@
                 return (
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl border-2 border-blue-500 p-4 mb-3 space-y-3 relative z-20 animate-in" onClick={e => e.stopPropagation()}>
                         <h3 className="text-sm font-bold text-blue-500 uppercase">編輯票券</h3>
-                        
+
                         <div className="flex gap-2 items-end">
                             <div className="flex-1">
                                 <label className="text-xs text-slate-400">品名</label>
-                                <input 
+                                <input
                                     list={`preset-names-edit-${task.id}`}
-                                    className="w-full bg-slate-50 dark:bg-slate-700 border-b border-slate-200 dark:border-slate-600 p-1 text-lg font-bold outline-none dark:text-white" 
-                                    value={editName} 
+                                    className="w-full bg-slate-50 dark:bg-slate-700 border-b border-slate-200 dark:border-slate-600 p-1 text-lg font-bold outline-none dark:text-white"
+                                    value={editName}
                                     onChange={e=>setEditName(e.target.value)}
                                     placeholder="輸入或選擇..."
                                 />
@@ -917,29 +981,29 @@
                         {/* Multi-Tag Editor for Edit Modal */}
                         <div>
                             <label className="text-xs text-slate-400">標籤</label>
-                            <TagSelectInput 
-                                allTags={tags} 
-                                selectedTags={editTags} 
-                                onTagsChange={setEditTags} 
-                                onManageTags={onManageTags} 
+                            <TagSelectInput
+                                allTags={tags}
+                                selectedTags={editTags}
+                                onTagsChange={setEditTags}
+                                onManageTags={onManageTags}
                             />
                         </div>
-                        
+
                         <div className="grid grid-cols-2 gap-2">
                              <div>
                                 <label className="text-xs text-slate-400">有效期限</label>
-                                <input 
-                                    type="date" 
-                                    className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]" 
-                                    value={getDatePickerValue(editExpiry)} 
+                                <input
+                                    type="date"
+                                    className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]"
+                                    value={getDatePickerValue(editExpiry)}
                                     onChange={e=>setEditExpiry(e.target.value)}
                                 />
                              </div>
                              <div>
                                 <label className="text-xs text-slate-400">取得日期 (新增日期)</label>
-                                <input 
-                                    type="date" 
-                                    className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]" 
+                                <input
+                                    type="date"
+                                    className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]"
                                     value={editCreatedAt}
                                     onChange={e=>setEditCreatedAt(e.target.value)}
                                 />
@@ -948,7 +1012,7 @@
 
                         <div><label className="text-xs text-slate-400">序號</label><input className="w-full font-mono bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 dark:text-white" value={editSerial} onChange={e=>setEditSerial(e.target.value)}/></div>
                         <div><label className="text-xs text-slate-400">備註</label><textarea className="w-full bg-slate-50 dark:bg-slate-700 p-2 rounded border border-slate-200 dark:border-slate-600 h-16 resize-none dark:text-white" value={editNote} onChange={e=>setEditNote(e.target.value)}/></div>
-                        
+
                         <div className="flex flex-col gap-2 pt-2 border-t dark:border-slate-700">
                             <label className="text-xs text-slate-400">圖片 (點擊設為封面)</label>
                             {editImages.length > 0 && (
@@ -962,7 +1026,7 @@
                                     ))}
                                 </div>
                             )}
-                            
+
                             <div className="flex gap-2 overflow-x-auto no-scrollbar">
                                 <label className="flex-1 flex items-center justify-center border border-dashed border-slate-300 dark:border-slate-600 rounded p-2 text-slate-400 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors whitespace-nowrap min-w-[80px]">
                                     <Upload size={14} className="mr-1"/> 上傳
@@ -975,7 +1039,7 @@
                                     <ImagePlus size={14} className="mr-1"/> 圖庫
                                 </button>
                             </div>
-                            
+
                             <div className="flex gap-2">
                                 <input type="text" value={editUrlInput} onChange={e=>setEditUrlInput(e.target.value)} placeholder="或輸入圖片網址..." className="flex-1 px-3 py-2 text-sm border rounded-xl bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white outline-none"/>
                                 <button onClick={handleEditUrlImport} disabled={!editUrlInput} className="px-3 bg-blue-100 text-blue-600 rounded-xl disabled:opacity-50 hover:bg-blue-200 transition-colors"><Globe size={18}/></button>
@@ -990,13 +1054,13 @@
                     </div>
                 );
             }
-            
+
             const hasMultipleImages = task.images && task.images.length > 1;
 
             return (
-                <div 
-                    className={`${cardClasses} cursor-pointer`} 
-                    onClick={() => { 
+                <div
+                    className={`${cardClasses} cursor-pointer`}
+                    onClick={() => {
                         if(isSelectionMode) {
                             onSelect(task.id);
                         } else if(!isDeleted) {
@@ -1005,7 +1069,7 @@
                     }}
                 >
                     {showRaw && <RawDataModal content={task.originalRaw || task.text || "無原始內容"} onClose={()=>setShowRaw(false)} />}
-                    
+
                     <div className="absolute top-0 right-0 z-10 flex flex-col items-end">
                         {isDuplicate && !isDeleted && (
                             <div className="bg-red-600 text-yellow-300 text-xs px-3 py-1 rounded-bl-lg font-black shadow-md mb-[1px] flex items-center gap-1 animate-bounce-slight border-l border-b border-white/20">
@@ -1023,26 +1087,25 @@
                                         <input type="checkbox" checked={isSelected} onChange={() => onSelect(task.id)} className="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
                                     ) : (
                                         // 修改為明顯的核銷按鈕
-                                        <button 
+                                        <button
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 if(!isDeleted) {
                                                     if (isCompleted) {
                                                         onToggle(task); // 取消核銷不用確認
                                                     } else {
-                                                        // if(confirm(`確認將「${task.productName}」標記為已使用？`)) { // 請改用客製化 Modal UI 替代 confirm()
-                                                        if(window.confirm(`確認將「${task.productName}」標記為已使用？`)) {
+                                                        if(confirm(`確認將「${task.productName}」標記為已使用？`)) {
                                                             onToggle(task);
                                                         }
                                                     }
                                                 }
                                             }}
-                                            disabled={isDeleted} 
+                                            disabled={isDeleted}
                                             className={`px-3 py-1 rounded-full text-xs font-bold shadow-sm border transition-all whitespace-nowrap ${
-                                                isDeleted 
-                                                    ? 'border-slate-200 text-slate-300 bg-slate-50' 
-                                                    : isCompleted 
-                                                        ? 'border-green-500 bg-green-500 text-white' 
+                                                isDeleted
+                                                    ? 'border-slate-200 text-slate-300 bg-slate-50'
+                                                    : isCompleted
+                                                        ? 'border-green-500 bg-green-500 text-white'
                                                         : 'border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:border-blue-300'
                                             }`}
                                         >
@@ -1051,7 +1114,7 @@
                                     )}
                                 </div>
                                 {task.image && (
-                                    <div 
+                                    <div
                                         className="w-28 h-28 rounded-lg border border-slate-200 dark:border-slate-600 overflow-hidden bg-white shadow-sm relative group cursor-pointer"
                                         onClick={(e) => { e.stopPropagation(); onPreviewImage(task.image); }}
                                     >
@@ -1068,32 +1131,32 @@
 
                             <div className="flex-1 min-w-0 flex flex-col justify-start">
                                 <div className="flex justify-between items-start gap-1">
-                                    <h3 
+                                    <h3
                                         className={`font-bold text-lg leading-snug break-all ${isCompleted || isDeleted ? 'text-slate-400 line-through decoration-slate-300' : 'text-slate-800 dark:text-slate-100'}`}
                                     >
                                         {task.productName}
                                     </h3>
                                 </div>
-                                
+
                                 {/* Multi-Tag Display with Remove interaction */}
                                 <div className="flex flex-wrap items-center gap-1 mt-2" onClick={e=>e.stopPropagation()}>
                                     {(task.tags || []).map(tag => (
-                                        <button 
-                                            key={tag} 
-                                            onClick={() => onToggleTag(task.id, tag, 'remove')} 
+                                        <button
+                                            key={tag}
+                                            onClick={() => onToggleTag(task.id, tag, 'remove')}
                                             className={`text-[10px] font-bold px-2 py-0.5 rounded border flex items-center gap-1 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20 active:scale-95 shadow-sm ${getTagColorClass(tag, isDarkMode)}`}
                                             disabled={isCompleted || isDeleted || isSelectionMode}
                                             title="點擊移除此標籤"
                                         >
-                                            {tag} 
+                                            {tag}
                                             {!(isCompleted || isDeleted || isSelectionMode) && <X size={8} className="text-red-500 dark:text-red-300"/>}
                                         </button>
                                     ))}
                                     {/* Add Tag Button */}
                                     {!isSelectionMode && !isDeleted && !isCompleted && (
-                                        <TagAddButton 
-                                            tags={tags} 
-                                            onAdd={(tag) => onToggleTag(task.id, tag, 'add')} 
+                                        <TagAddButton
+                                            tags={tags}
+                                            onAdd={(tag) => onToggleTag(task.id, tag, 'add')}
                                             currentTags={task.tags}
                                             onManageTags={onManageTags}
                                         />
@@ -1105,9 +1168,9 @@
                                         </div>
                                     )}
                                 </div>
-                                
+
                                 {task.note && <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded line-clamp-3 whitespace-pre-wrap"><StickyNote size={10} className="inline mr-1"/>{task.note}</p>}
-                                
+
                                 {hasMultipleImages && (
                                     <div className="flex gap-1 mt-2 overflow-x-auto no-scrollbar" onClick={e=>e.stopPropagation()}>
                                         {task.images.filter(img => img !== task.image).map((img, idx) => (
@@ -1128,10 +1191,10 @@
                                     <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 mb-0.5 ml-0.5">有效期限</span>
                                     {task.expiry ? (
                                         <span className={`text-sm font-black flex items-center gap-1.5 px-2.5 py-1 rounded-lg border ${
-                                            isCompleted || isDeleted 
-                                                ? 'text-slate-400 bg-slate-100 border-slate-200 dark:bg-slate-800 dark:border-slate-700' 
-                                                : isExpiring 
-                                                    ? 'text-red-600 bg-red-50 border-red-100 dark:bg-red-900/30 dark:border-red-800' 
+                                            isCompleted || isDeleted
+                                                ? 'text-slate-400 bg-slate-100 border-slate-200 dark:bg-slate-800 dark:border-slate-700'
+                                                : isExpiring
+                                                    ? 'text-red-600 bg-red-50 border-red-100 dark:bg-red-900/30 dark:border-red-800'
                                                     : 'text-green-700 bg-green-50 border-green-100 dark:bg-green-900/30 dark:border-green-800'
                                         }`}>
                                             <Calendar size={14} strokeWidth={2.5}/> {task.expiry}
@@ -1165,7 +1228,7 @@
                                 </div>
                             </div>
                         </div>
-                        
+
                         {isCompleted && task.completedAt && (
                             <div className="flex justify-end mt-1">
                                 <div className="text-[10px] text-slate-400 font-mono bg-slate-50 dark:bg-slate-800/50 px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -1181,7 +1244,7 @@
                         <div className="border-t border-slate-100 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-800/50 animate-in cursor-default text-center relative z-20" onClick={e=>e.stopPropagation()}>
                             <div className="absolute top-2 right-2"><button onClick={()=>setShowCodes(false)} className="p-1 bg-slate-200 dark:bg-slate-700 rounded-full text-slate-500"><X size={16}/></button></div>
                             <h4 className="font-bold text-slate-700 dark:text-slate-200 mb-4">{task.productName}</h4>
-                            
+
                             {task.isTicket && (
                                 <div className="space-y-4 flex flex-col items-center">
                                     <div className="bg-white p-2 rounded-lg"><BarcodeCanvas text={task.serial} /></div>
@@ -1189,14 +1252,14 @@
                                     <div className="text-2xl font-mono font-bold tracking-widest text-slate-800 dark:text-white select-all">{task.serial}</div>
                                 </div>
                             )}
-                            
+
                             {task.note && <div className="mt-4 bg-amber-50 dark:bg-amber-900/20 p-3 rounded-lg text-sm text-left text-slate-600 dark:text-slate-300 border border-amber-100 dark:border-amber-800/30 whitespace-pre-wrap">{task.note}</div>}
                         </div>
                     )}
                 </div>
             );
         };
-        
+
         // --- New Tag Add Button Component for Card ---
         const TagAddButton = ({ tags, onAdd, currentTags, onManageTags }) => {
             const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -1204,7 +1267,7 @@
             const dropdownRef = useRef(null);
 
             const availableTags = tags.filter(t => !currentTags.includes(t));
-            
+
             useEffect(() => {
                 const handleClickOutside = (event) => {
                     if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -1224,8 +1287,8 @@
 
             return (
                 <div className="relative inline-block" ref={dropdownRef}>
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); setIsDropdownOpen(!isDropdownOpen); }} 
+                    <button
+                        onClick={(e) => { e.stopPropagation(); setIsDropdownOpen(!isDropdownOpen); }}
                         className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-blue-500 flex items-center gap-0.5 hover:bg-blue-50 dark:hover:bg-slate-600 transition-colors active:scale-95 shadow-sm"
                         title="新增標籤"
                     >
@@ -1235,10 +1298,10 @@
                     {isDropdownOpen && (
                         <div className="absolute left-0 mt-2 w-48 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-30 p-2 animate-in">
                             <div className="flex gap-1 mb-2">
-                                <input 
-                                    type="text" 
-                                    value={newTagInput} 
-                                    onChange={(e) => setNewTagInput(e.target.value)} 
+                                <input
+                                    type="text"
+                                    value={newTagInput}
+                                    onChange={(e) => setNewTagInput(e.target.value)}
                                     placeholder="輸入新標籤"
                                     className="flex-1 px-2 py-1 text-sm border rounded outline-none bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white"
                                     onKeyDown={(e) => { if (e.key === 'Enter' && newTagInput.trim()) handleAdd(newTagInput); }}
@@ -1246,12 +1309,12 @@
                                 />
                                 <button onClick={() => { if(newTagInput.trim()) handleAdd(newTagInput); }} className="px-2 bg-blue-600 text-white rounded hover:bg-blue-700"><Check size={14}/></button>
                             </div>
-                            
+
                             {availableTags.length > 0 && (
                                 <div className="space-y-1 max-h-24 overflow-y-auto pr-1">
                                     {availableTags.map(tag => (
-                                        <button 
-                                            key={tag} 
+                                        <button
+                                            key={tag}
                                             onClick={() => handleAdd(tag)}
                                             className="w-full text-left text-sm px-2 py-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 truncate"
                                         >
@@ -1292,7 +1355,7 @@
                             </div>
                         )}
                     </div>
-                    
+
                     {isOpen && (
                         <div className="grid grid-cols-3 gap-2 mt-4 relative z-10 border-t border-white/20 pt-3">
                             <div className="text-center"><div className="text-xs opacity-70">今日新增</div><div className="font-bold">{tasks.filter(t=> { const d = t.createdAt ? new Date(t.createdAt) : new Date(); return d.toDateString() === new Date().toDateString() }).length}</div></div>
@@ -1322,7 +1385,7 @@
             </div>
         );
 
-        const AddTaskModal = ({ isOpen, onClose, onAddBatch, tags, onManageTags, gallery, onAddToGallery, presetNames, onManagePresets }) => {
+        const AddTaskModal = ({ isOpen, onClose, onAddBatch, tags, onManageTags, gallery, onAddToGallery, presetNames, onManagePresets, geminiApiKey }) => {
             const [mode, setMode] = useState('paste');
             const [pasteVal, setPasteVal] = useState('');
             const [batchName, setBatchName] = useState('');
@@ -1330,7 +1393,7 @@
             const [manualName, setManualName] = useState('');
             const [manualSerial, setManualSerial] = useState('');
             const [manualExpiry, setManualExpiry] = useState('');
-            const [manualCreatedAt, setManualCreatedAt] = useState(''); 
+            const [manualCreatedAt, setManualCreatedAt] = useState('');
             const [manualNote, setManualNote] = useState('');
             const [manualUrl, setManualUrl] = useState('');
             const [manualTags, setManualTags] = useState([]); // Changed to tags array
@@ -1338,17 +1401,18 @@
             const [pendingMainImage, setPendingMainImage] = useState('');
             const [urlInput, setUrlInput] = useState('');
             const [showGallery, setShowGallery] = useState(false);
+            const [aiLoading, setAiLoading] = useState(false); // New AI Loading State
             const fileInputRef = useRef(null);
 
             useEffect(() => {
                 if (isOpen) {
-                    setPasteVal(''); setManualName(''); setManualSerial(''); 
-                    setManualExpiry(''); setManualNote(''); setManualUrl(''); 
+                    setPasteVal(''); setManualName(''); setManualSerial('');
+                    setManualExpiry(''); setManualNote(''); setManualUrl('');
                     setManualTags([]); // Changed
                     setPendingImages([]); setPendingMainImage('');
                     setBatchName(''); setBatchTags([]); // Changed
                     setMode('paste');
-                    setUrlInput(''); 
+                    setUrlInput('');
                     const today = new Date().toISOString().split('T')[0];
                     setManualCreatedAt(today);
                 }
@@ -1362,12 +1426,12 @@
                     setUrlInput('');
                 } catch(e) { window.open(urlInput, '_blank'); }
             };
-            
+
             const addPendingImage = (img) => {
                 setPendingImages(prev => [...prev, img]);
                 if (!pendingMainImage) setPendingMainImage(img);
             };
-            
+
             const removePendingImage = (indexToRemove) => {
                 const imgToRemove = pendingImages[indexToRemove];
                 const newImages = pendingImages.filter((_, i) => i !== indexToRemove);
@@ -1379,7 +1443,64 @@
 
             const toggleSaveToGallery = (img) => {
                 onAddToGallery(img);
-                // alert("已加入圖庫！"); // 請改用客製化 Modal UI 替代 alert()
+                alert("已加入圖庫！");
+            };
+
+            // --- AI Parsing Logic ---
+            const handleAiParsing = async () => {
+                if (!geminiApiKey) {
+                    alert("請先在右上角「設定」中設定 Gemini API Key！");
+                    return;
+                }
+                if (!pasteVal.trim()) {
+                    alert("請在文字框中貼上票券文字內容。");
+                    return;
+                }
+
+                setAiLoading(true);
+                try {
+                    const aiResults = await callGeminiParsing(pasteVal, geminiApiKey);
+                    
+                    if (!aiResults || aiResults.length === 0) {
+                        alert("AI 未能解析出任何票券資訊。");
+                        return;
+                    }
+                    
+                    const now = Date.now();
+                    const aiParsedItems = aiResults.map((item, index) => {
+                        // 統一處理 AI 提供的資訊，轉換為 App 內部格式
+                        const finalName = batchName.trim() || item.productName || "AI 解析票券";
+                        const finalTags = [...new Set([...batchTags, ...(item.tags || [])])];
+                        
+                        return {
+                            id: 'ai_task_' + now + '_' + index + '_' + Math.random().toString(36).substr(2,5),
+                            text: finalName,
+                            originalRaw: item.originalRaw || pasteVal,
+                            isTicket: !!item.serial,
+                            serial: (item.serial || "").replace(/\s/g, ''),
+                            productName: finalName,
+                            expiry: item.expiry || '',
+                            tags: finalTags,
+                            images: pendingImages || [],
+                            image: pendingMainImage || (pendingImages.length > 0 ? pendingImages[0] : ''),
+                            completed: false,
+                            isDeleted: false,
+                            createdAt: now,
+                            note: `AI 備註: ${item.originalRaw || '無原始段落'}`,
+                            url: '',
+                        };
+                    });
+                    
+                    // 直接將結果視為批量貼上的結果，並關閉 Modal (與原本 Regex 成功解析的處理方式相同)
+                    onAddBatch(aiParsedItems);
+                    onClose();
+                    
+                } catch (error) {
+                    console.error("AI 解析錯誤:", error);
+                    alert(`AI 解析失敗: ${error.message || "未知錯誤"}`);
+                } finally {
+                    setAiLoading(false);
+                }
             };
 
             const handleSubmit = () => {
@@ -1396,6 +1517,7 @@
                 }
 
                 if (mode === 'paste') {
+                    // 預設/備案：使用 Regex 解析
                     const parsedItems = parseBatchTicketInfo(pasteVal, batchName, batchTags, pendingImages); // Used batchTags
                     parsedItems.forEach((item, idx) => {
                         results.push({
@@ -1408,25 +1530,25 @@
                     const fmtExpiry = manualExpiry.replace(/-/g, '/');
                     const finalImages = pendingImages || [];
                     const finalMainImage = pendingMainImage || (finalImages.length > 0 ? finalImages[0] : '');
-                    results.push({ 
-                        id: 'task_' + now + '_' + Math.random().toString(36).substr(2,9), 
-                        text: manualName, 
-                        originalRaw: pasteVal || '', 
-                        isTicket: (!!manualSerial.trim() || !!finalMainImage), 
-                        serial: manualSerial.trim(), 
-                        productName: manualName, 
-                        expiry: fmtExpiry, 
-                        completed: false, 
-                        isDeleted: false, 
-                        createdAt: createdTimestamp, 
-                        note: manualNote, 
-                        url: manualUrl, 
+                    results.push({
+                        id: 'task_' + now + '_' + Math.random().toString(36).substr(2,9),
+                        text: manualName,
+                        originalRaw: pasteVal || '',
+                        isTicket: (!!manualSerial.trim() || !!finalMainImage),
+                        serial: manualSerial.trim(),
+                        productName: manualName,
+                        expiry: fmtExpiry,
+                        completed: false,
+                        isDeleted: false,
+                        createdAt: createdTimestamp,
+                        note: manualNote,
+                        url: manualUrl,
                         tags: manualTags, // Used manualTags
                         image: finalMainImage,
                         images: finalImages
                     });
                 }
-                
+
                 onAddBatch(results);
                 onClose();
             };
@@ -1465,17 +1587,17 @@
                     const item = items[i];
                     if (item.type.indexOf('image') !== -1 || (item.kind === 'file' && item.type.includes('image'))) {
                         imageBlob = item.getAsFile();
-                        if (imageBlob) break; 
+                        if (imageBlob) break;
                     }
                 }
                 if (imageBlob) {
-                    e.preventDefault(); 
+                    e.preventDefault();
                     try {
                         const compressed = await compressImage(imageBlob);
                         addPendingImage(compressed);
                     } catch (err) { console.error(err); }
                     if (text) setPasteVal(prev => prev + (prev ? '\n' : '') + text);
-                } 
+                }
             };
 
             if(!isOpen) return null;
@@ -1496,13 +1618,13 @@
                         {mode === 'paste' ? (
                             <div className="space-y-3">
                                 <div className="relative">
-                                    <textarea 
-                                        value={pasteVal} 
-                                        onChange={e=>setPasteVal(e.target.value)} 
-                                        onPaste={handlePaste} 
-                                        placeholder="在此貼上多筆簡訊或文字...&#10;支援自動分割：「品名 -> 序號」或「品名 -> 期限 -> 序號」之格式" 
-                                        className="w-full h-40 p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none resize-none dark:text-white focus:ring-2 focus:ring-blue-500 transition-all" 
-                                        autoFocus 
+                                    <textarea
+                                        value={pasteVal}
+                                        onChange={e=>setPasteVal(e.target.value)}
+                                        onPaste={handlePaste}
+                                        placeholder="在此貼上多筆簡訊或文字...&#10;支援自動分割：「品名 -> 序號」或「品名 -> 期限 -> 序號」之格式"
+                                        className="w-full h-40 p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none resize-none dark:text-white focus:ring-2 focus:ring-blue-500 transition-all"
+                                        autoFocus
                                     />
                                     <div className="absolute bottom-3 right-3 pointer-events-none">
                                         <div className="bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400 text-[10px] px-2 py-1 rounded-md opacity-70">
@@ -1511,13 +1633,29 @@
                                     </div>
                                 </div>
                                 
-                                {/* Batch Pre-settings */}
+                                {/* New AI Parsing Button */}
+                                <button 
+                                    onClick={handleAiParsing}
+                                    disabled={!pasteVal.trim() || aiLoading}
+                                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-200 dark:shadow-none flex items-center justify-center gap-2 transition-all"
+                                >
+                                    {aiLoading ? (
+                                        <>
+                                            <Loader2 size={20} className="animate-spin"/> AI 智慧解析中...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Wand2 size={20}/> AI 智慧解析
+                                        </>
+                                    )}
+                                </button>
+                                
                                 <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl border border-blue-100 dark:border-blue-800">
                                     <h3 className="text-xs font-bold text-blue-600 dark:text-blue-400 mb-2 flex items-center gap-1"><Layers size={12}/> 預設值 (強制套用至所有解析結果)</h3>
                                     <div className="space-y-2">
                                         <div className="flex gap-2">
                                             <div className="flex-1">
-                                                <input 
+                                                <input
                                                     list="preset-names-batch"
                                                     value={batchName}
                                                     onChange={e=>setBatchName(e.target.value)}
@@ -1545,23 +1683,23 @@
                                     </div>
                                 </div>
 
-                                <button 
-                                    onClick={handleAnalyzeToManual} 
+                                <button
+                                    onClick={handleAnalyzeToManual}
                                     disabled={!pasteVal.trim()}
                                     className="w-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300 font-bold py-2 rounded-lg text-sm flex items-center justify-center gap-2"
                                 >
-                                    <ArrowRightLeft size={14}/> 僅解析第一筆並轉手動編輯
+                                    <ArrowRightLeft size={14}/> 傳統 Regex 解析第一筆並轉手動編輯
                                 </button>
                             </div>
                         ) : (
                             <div className="space-y-3">
                                 <div className="flex gap-2 items-end">
                                     <div className="flex-1">
-                                        <input 
+                                        <input
                                             list="preset-names"
-                                            value={manualName} 
-                                            onChange={e=>setManualName(e.target.value)} 
-                                            placeholder="品名 (必填，可選或輸入)" 
+                                            value={manualName}
+                                            onChange={e=>setManualName(e.target.value)}
+                                            placeholder="品名 (必填，可選或輸入)"
                                             className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none font-bold dark:text-white"
                                         />
                                         <datalist id="preset-names">
@@ -1604,7 +1742,7 @@
                                 <button onClick={handlePasteBtn} className="flex items-center gap-1 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-blue-600 dark:text-blue-300 text-sm font-medium hover:bg-slate-200 whitespace-nowrap"><ClipboardPaste size={16}/> 貼上</button>
                                 <button onClick={()=>setShowGallery(true)} className="flex items-center gap-1 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-pink-500 text-sm font-medium hover:bg-slate-200 whitespace-nowrap"><ImagePlus size={16}/> 圖庫</button>
                             </div>
-                            
+
                             <div className="flex gap-2 mb-2">
                                 <input type="text" value={urlInput} onChange={e=>setUrlInput(e.target.value)} placeholder="或輸入圖片網址..." className="flex-1 px-3 py-2 text-sm border rounded-xl bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white outline-none"/>
                                 <button onClick={handleUrlImport} disabled={!urlInput} className="px-3 bg-blue-100 text-blue-600 rounded-xl disabled:opacity-50 hover:bg-blue-200 transition-colors"><Globe size={18}/></button>
@@ -1627,12 +1765,17 @@
                                 </div>
                             )}
                         </div>
-                        
+
                         <input type="file" ref={fileInputRef} hidden accept="image/*" multiple onChange={handleImage} />
 
-                        <button onClick={handleSubmit} disabled={mode==='paste' ? (!pasteVal && pendingImages.length===0) : !manualName} className="w-full mt-6 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-200 dark:shadow-none flex items-center justify-center gap-2">
-                            <Plus size={20}/> {mode === 'paste' ? '批量建立' : '建立票券'}
+                        <button
+                            onClick={handleSubmit}
+                            disabled={mode==='paste' ? (!pasteVal && pendingImages.length===0) : !manualName}
+                            className={`w-full mt-6 ${mode==='paste' ? 'bg-slate-500 hover:bg-slate-600' : 'bg-blue-600 hover:bg-blue-700'} disabled:bg-slate-300 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-200 dark:shadow-none flex items-center justify-center gap-2`}
+                        >
+                            <Plus size={20}/> {mode === 'paste' ? '傳統 Regex 批量建立' : '建立票券'}
                         </button>
+                        {mode === 'paste' && <p className="text-[10px] text-slate-400 text-center mt-2">使用上方「AI 智慧解析」按鈕可獲得更精準的結構化結果。</p>}
 
                         {showGallery && <GalleryModal isOpen={showGallery} onClose={()=>setShowGallery(false)} images={gallery} onSelect={(img)=>{addPendingImage(img);}} onAddImage={onAddToGallery} onDelete={(idx)=> {const newG = [...gallery]; newG.splice(idx,1); onAddToGallery(newG, true);}} />}
                     </div>
@@ -1640,21 +1783,28 @@
             );
         };
 
-        const SettingsModal = ({ isOpen, onClose, tgToken, setTgToken, tgChatId, setTgChatId, notifyDays, setNotifyDays, onSave }) => {
+        const SettingsModal = ({ isOpen, onClose, tgToken, setTgToken, tgChatId, setTgChatId, notifyDays, setNotifyDays, geminiApiKey, setGeminiApiKey, onSave }) => {
             const [localToken, setLocalToken] = useState(tgToken);
             const [localChatId, setLocalChatId] = useState(tgChatId);
             const [localDays, setLocalDays] = useState(notifyDays);
+            const [localGeminiKey, setLocalGeminiKey] = useState(geminiApiKey); // New State
 
             useEffect(() => {
                 if (isOpen) {
                     setLocalToken(tgToken);
                     setLocalChatId(tgChatId);
                     setLocalDays(notifyDays);
+                    setLocalGeminiKey(geminiApiKey); // Set local state for key
                 }
-            }, [isOpen, tgToken, tgChatId, notifyDays]);
+            }, [isOpen, tgToken, tgChatId, notifyDays, geminiApiKey]);
 
             const handleSave = () => {
-                onSave({ tgToken: localToken, tgChatId: localChatId, notifyDays: localDays });
+                onSave({ 
+                    tgToken: localToken, 
+                    tgChatId: localChatId, 
+                    notifyDays: localDays,
+                    geminiApiKey: localGeminiKey // Save new key
+                });
                 onClose();
             };
 
@@ -1664,47 +1814,65 @@
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-sm w-full p-6 border border-slate-100 dark:border-slate-700">
                         <div className="flex justify-between items-center mb-4">
                             <h2 className="text-lg font-bold dark:text-white flex items-center gap-2">
-                                <BellRing size={20} className="text-blue-500"/> 通知設定
+                                <CloudCog size={20} className="text-blue-500"/> 系統設定
                             </h2>
                             <div className="text-[10px] bg-emerald-100 text-emerald-600 px-2 py-1 rounded-full flex items-center gap-1 font-bold">
                                 <WifiOff size={12}/> Offline Local
                             </div>
                         </div>
-                        
-                        <div className="space-y-3">
+
+                        <div className="space-y-4">
+                            {/* Gemini API Key Setting (New) */}
+                            <div className="border-b dark:border-slate-700 pb-4">
+                                <h3 className="text-sm font-bold text-blue-600 dark:text-blue-400 mb-2 flex items-center gap-2"><Wand2 size={16}/> Gemini AI 解析設定</h3>
+                                <label className="text-xs font-bold text-slate-500 dark:text-slate-400 block mb-1">Gemini API Key</label>
+                                <input
+                                    type="password" // 遮蔽內容
+                                    value={localGeminiKey}
+                                    onChange={e=>setLocalGeminiKey(e.target.value)}
+                                    placeholder="輸入您的 Google Gemini API Key"
+                                    className="w-full p-2 text-sm border rounded-lg bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                                <p className="text-[10px] text-slate-400 mt-1">此 Key 僅儲存於您的瀏覽器本機。</p>
+                            </div>
+                            
+                            {/* Expiry Days Setting */}
                             <div>
+                                <h3 className="text-sm font-bold text-blue-600 dark:text-blue-400 mb-2 flex items-center gap-2"><BellRing size={16}/> 到期通知設定</h3>
                                 <label className="text-xs font-bold text-slate-500 dark:text-slate-400 block mb-1">快到期通知天數 (N天)</label>
                                 <div className="flex items-center gap-2">
-                                    <input 
-                                        type="number" 
+                                    <input
+                                        type="number"
                                         min="1"
                                         max="365"
-                                        value={localDays} 
-                                        onChange={e=>setLocalDays(parseInt(e.target.value) || 7)} 
+                                        value={localDays}
+                                        onChange={e=>setLocalDays(parseInt(e.target.value) || 7)}
                                         className="w-20 p-2 text-sm text-center font-bold border rounded-lg bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
                                     />
                                     <span className="text-sm text-slate-600 dark:text-slate-300">天內通知</span>
                                 </div>
                             </div>
 
+                            {/* Telegram Setting */}
                             <div className="border-t dark:border-slate-700 my-2 pt-2">
+                                <h3 className="text-sm font-bold text-blue-600 dark:text-blue-400 mb-2 flex items-center gap-2"><Send size={16}/> Telegram 通知設定</h3>
                                 <label className="text-xs font-bold text-slate-500 dark:text-slate-400 block mb-1">Telegram Bot Token</label>
-                                <input 
-                                    type="text" 
-                                    value={localToken} 
-                                    onChange={e=>setLocalToken(e.target.value)} 
-                                    placeholder="123456:ABC-DEF..." 
+                                <input
+                                    type="text"
+                                    value={localToken}
+                                    onChange={e=>setLocalToken(e.target.value)}
+                                    placeholder="123456:ABC-DEF..."
                                     className="w-full p-2 text-sm border rounded-lg bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
                                 />
                             </div>
-                            
+
                             <div>
                                 <label className="text-xs font-bold text-slate-500 dark:text-slate-400 block mb-1">Chat ID</label>
-                                <input 
-                                    type="text" 
-                                    value={localChatId} 
-                                    onChange={e=>setLocalChatId(e.target.value)} 
-                                    placeholder="12345678" 
+                                <input
+                                    type="text"
+                                    value={localChatId}
+                                    onChange={e=>setLocalChatId(e.target.value)}
+                                    placeholder="12345678"
                                     className="w-full p-2 text-sm border rounded-lg bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
                                 />
                             </div>
@@ -1725,7 +1893,7 @@
             const [activeTab, setActiveTab] = useState('backup');
             const [restoreInput, setRestoreInput] = useState('');
             const [restoreStatus, setRestoreStatus] = useState('');
-            const [pendingImport, setPendingImport] = useState(null); 
+            const [pendingImport, setPendingImport] = useState(null);
             const fileInputRef = useRef(null);
 
             useEffect(() => {
@@ -1741,12 +1909,8 @@
             const handleBackupCopy = async () => {
                 const dataStr = JSON.stringify(tasks);
                 const success = await copyToClipboard(dataStr);
-                // if (success) { alert(`✅ 已複製 ${tasks.length} 筆資料 (含圖片) 到剪貼簿！`); } // 請改用客製化 Modal UI 替代 alert()
-                if (success) { console.log(`✅ 已複製 ${tasks.length} 筆資料 (含圖片) 到剪貼簿！`); } 
-                else { 
-                    // alert("❌ 複製失敗。請嘗試手動選取文字或改用「下載檔案」功能。"); // 請改用客製化 Modal UI 替代 alert()
-                    console.error("❌ 複製失敗。請嘗試手動選取文字或改用「下載檔案」功能。"); 
-                }
+                if (success) { alert(`✅ 已複製 ${tasks.length} 筆資料 (含圖片) 到剪貼簿！`); }
+                else { alert("❌ 複製失敗。請嘗試手動選取文字或改用「下載檔案」功能。"); }
             };
 
             const handleFullDownload = () => {
@@ -1758,7 +1922,7 @@
                     setRestoreStatus('❌ 格式錯誤：匯入的資料必須是陣列 (Array)');
                     return;
                 }
-                setPendingImport(data); 
+                setPendingImport(data);
                 setRestoreStatus('');
             };
 
@@ -1767,9 +1931,9 @@
                     setRestoreStatus('解析中...');
                     const data = JSON.parse(restoreInput);
                     processImportData(data);
-                } catch (e) { 
-                    setRestoreStatus('❌ 格式錯誤，請確認文字為有效的 JSON'); 
-                    console.error(e); 
+                } catch (e) {
+                    setRestoreStatus('❌ 格式錯誤，請確認文字為有效的 JSON');
+                    console.error(e);
                 }
             };
 
@@ -1793,10 +1957,11 @@
 
             const executeRestore = async (mode) => {
                 if (!pendingImport) return;
-                
-                // if (mode === 'overwrite') { // 請改用客製化 Modal UI 替代 confirm()
-                if (mode === 'overwrite' && !window.confirm(`⚠️ 嚴重警告 ⚠️\n\n此動作將會「刪除」您目前所有的資料，並完全替換成匯入的內容。\n\n確定要繼續嗎？`)) {
-                    return;
+
+                if (mode === 'overwrite') {
+                    if (!confirm(`⚠️ 嚴重警告 ⚠️\n\n此動作將會「刪除」您目前所有的資料，並完全替換成匯入的內容。\n\n確定要繼續嗎？`)) {
+                        return;
+                    }
                 }
 
                 setRestoreStatus('處理中...');
@@ -1815,7 +1980,7 @@
                             <h2 className="font-bold text-lg flex items-center gap-2 text-slate-700 dark:text-white"><Database size={20}/> 資料備份與還原</h2>
                             <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button>
                         </div>
-                        
+
                         <div className="flex border-b dark:border-slate-700">
                             <button onClick={() => setActiveTab('backup')} className={`flex-1 py-3 text-sm font-bold text-center transition-colors ${activeTab === 'backup' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50 dark:bg-blue-900/20' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>匯出 (備份)</button>
                             <button onClick={() => setActiveTab('restore')} className={`flex-1 py-3 text-sm font-bold text-center transition-colors ${activeTab === 'restore' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50 dark:bg-blue-900/20' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>匯入 (還原)</button>
@@ -1849,7 +2014,7 @@
                                                 <div className="text-emerald-700 dark:text-emerald-400 font-bold">成功讀取 {pendingImport.length} 筆資料</div>
                                             </div>
                                             <p className="text-sm text-slate-600 dark:text-slate-300 mb-4 text-center font-bold">請問您要如何匯入這些資料？</p>
-                                            
+
                                             <div className="grid grid-cols-1 gap-3">
                                                 <button onClick={() => executeRestore('append')} className="flex items-center gap-3 p-4 border border-blue-200 dark:border-slate-600 bg-blue-50 dark:bg-slate-700 rounded-xl hover:bg-blue-100 dark:hover:bg-slate-600 transition-colors text-left group">
                                                     <div className="bg-blue-200 dark:bg-slate-500 p-2 rounded-full text-blue-700 dark:text-white"><FilePlus2 size={20}/></div>
@@ -1858,7 +2023,7 @@
                                                         <div className="text-xs text-slate-500 dark:text-slate-300">保留現有資料，將新資料加入清單後方</div>
                                                     </div>
                                                 </button>
-                                                
+
                                                 <button onClick={() => executeRestore('overwrite')} className="flex items-center gap-3 p-4 border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 rounded-xl hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors text-left group">
                                                     <div className="bg-red-200 dark:bg-red-800 p-2 rounded-full text-red-700 dark:text-white"><RefreshCw size={20}/></div>
                                                     <div>
@@ -1871,16 +2036,16 @@
                                         </div>
                                     ) : (
                                         <>
-                                            <div 
+                                            <div
                                                 onClick={() => fileInputRef.current.click()}
                                                 className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-6 text-center cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors group"
                                             >
-                                                <input 
-                                                    type="file" 
-                                                    ref={fileInputRef} 
-                                                    onChange={handleFileRestore} 
-                                                    accept=".json" 
-                                                    hidden 
+                                                <input
+                                                    type="file"
+                                                    ref={fileInputRef}
+                                                    onChange={handleFileRestore}
+                                                    accept=".json"
+                                                    hidden
                                                 />
                                                 <div className="flex flex-col items-center gap-2">
                                                     <div className="bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 p-3 rounded-full group-hover:scale-110 transition-transform">
@@ -1898,9 +2063,9 @@
                                             </div>
 
                                             <textarea value={restoreInput} onChange={(e) => setRestoreInput(e.target.value)} placeholder="請在此貼上備份的文字內容 (JSON)..." className="w-full h-24 p-3 border rounded-xl text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none resize-none bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-white"></textarea>
-                                            
+
                                             {restoreStatus && <div className={`text-sm font-bold text-center ${restoreStatus.includes('❌') ? 'text-red-500' : 'text-blue-600'}`}>{restoreStatus}</div>}
-                                            
+
                                             <button onClick={handleTextRestore} disabled={!restoreInput.trim()} className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2"><FileJson size={18}/> 解析文字</button>
                                         </>
                                     )}
@@ -1939,38 +2104,41 @@
             const [workspaceId, setWorkspaceId] = useState(() => localStorage.getItem('ticket_offline_workspace_id') || '');
             const [isJoined, setIsJoined] = useState(false);
             const [tasks, setTasks] = useState([]);
-            const [tags, setTags] = useState([]); 
-            const [gallery, setGallery] = useState([]); 
-            const [presetNames, setPresetNames] = useState([]); 
+            const [tags, setTags] = useState([]);
+            const [gallery, setGallery] = useState([]);
+            const [presetNames, setPresetNames] = useState([]);
             const [loading, setLoading] = useState(false);
-            
+
             const [tgToken, setTgToken] = useState('');
             const [tgChatId, setTgChatId] = useState('');
             const [notifyDays, setNotifyDays] = useState(7);
+
+            // New: Gemini API Key State
+            const [geminiApiKey, setGeminiApiKey] = useState(() => localStorage.getItem('ticket_offline_gemini_key') || '');
+
             const [showSettings, setShowSettings] = useState(false);
 
-            const [viewStatus, setViewStatus] = useState('active'); 
+            const [viewStatus, setViewStatus] = useState('active');
             const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('pref_theme') === 'dark');
             const [isAddModalOpen, setIsAddModalOpen] = useState(false);
             const [searchQuery, setSearchQuery] = useState('');
-            
+
             // --- Multi-Tag State Update ---
             const [activeTagFilters, setActiveTagFilters] = useState(new Set()); // Multi-select tags (OR logic)
             const [currentSpecialFilter, setCurrentSpecialFilter] = useState('all'); // Single-select special filters
-            // Removed: const [currentTagFilter, setCurrentTagFilter] = useState('all'); 
-            
+
             const [expiryThreshold, setExpiryThreshold] = useState(() => parseInt(localStorage.getItem('pref_expiryThreshold') || '30'));
             const [sortType, setSortType] = useState('expiring');
             const [previewImage, setPreviewImage] = useState(null);
-            
+
             const [isSelectionMode, setIsSelectionMode] = useState(false);
             const [selectedTasks, setSelectedTasks] = useState(new Set());
             const [showTagManager, setShowTagManager] = useState(false);
-            const [showPresetManager, setShowPresetManager] = useState(false); 
+            const [showPresetManager, setShowPresetManager] = useState(false);
             const [showDataTools, setShowDataTools] = useState(false);
-            
+
             const [showBatchEditPanel, setShowBatchEditPanel] = useState(false);
-            
+
             const menuRef = useRef(null);
             const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -1982,8 +2150,8 @@
 
             const TASKS_KEY = `offline_tasks_${workspaceId}`;
             const TAGS_KEY = `offline_tags_${workspaceId}`;
-            const GALLERY_KEY = `offline_gallery_${workspaceId}`; 
-            const PRESET_NAMES_KEY = `offline_preset_names_${workspaceId}`; 
+            const GALLERY_KEY = `offline_gallery_${workspaceId}`;
+            const PRESET_NAMES_KEY = `offline_preset_names_${workspaceId}`;
             const SETTINGS_KEY = `offline_settings_${workspaceId}`;
 
             useEffect(() => {
@@ -1995,6 +2163,8 @@
                     const storedGallery = localStorage.getItem(GALLERY_KEY);
                     const storedPresets = localStorage.getItem(PRESET_NAMES_KEY);
                     const storedSettings = localStorage.getItem(SETTINGS_KEY);
+                    // Load Gemini Key
+                    const storedGeminiKey = localStorage.getItem('ticket_offline_gemini_key');
 
                     if (storedTasks) {
                         // Backward Compatibility: Convert single 'tag' field to 'tags' array
@@ -2007,7 +2177,7 @@
                                 ...task,
                                 tags: tags,
                                 // Clean up legacy field
-                                tag: undefined 
+                                tag: undefined
                             };
                         });
                         setTasks(loadedTasks);
@@ -2021,6 +2191,8 @@
                         setTgChatId(parsed.tgChatId || '');
                         setNotifyDays(parsed.notifyDays || 7);
                     }
+                    if (storedGeminiKey) setGeminiApiKey(storedGeminiKey); // Set state from localStorage
+
                     setLoading(false);
                 }
             }, [workspaceId]);
@@ -2029,6 +2201,8 @@
             useEffect(() => { if(isJoined && workspaceId) localStorage.setItem(TAGS_KEY, JSON.stringify(tags)); }, [tags, workspaceId, isJoined]);
             useEffect(() => { if(isJoined && workspaceId) localStorage.setItem(GALLERY_KEY, JSON.stringify(gallery)); }, [gallery, workspaceId, isJoined]);
             useEffect(() => { if(isJoined && workspaceId) localStorage.setItem(PRESET_NAMES_KEY, JSON.stringify(presetNames)); }, [presetNames, workspaceId, isJoined]);
+            // Save Gemini Key
+            useEffect(() => { localStorage.setItem('ticket_offline_gemini_key', geminiApiKey); }, [geminiApiKey]);
 
             useEffect(() => {
                 const handleClickOutside = (event) => {
@@ -2037,22 +2211,25 @@
                 document.addEventListener("mousedown", handleClickOutside);
                 return () => document.removeEventListener("mousedown", handleClickOutside);
             }, []);
-            
+
             const handleSaveSettings = (newSettings) => {
                 setTgToken(newSettings.tgToken);
                 setTgChatId(newSettings.tgChatId);
                 setNotifyDays(newSettings.notifyDays);
+                setGeminiApiKey(newSettings.geminiApiKey); // Update Gemini Key state
+
                 if(isJoined && workspaceId) {
                     localStorage.setItem(SETTINGS_KEY, JSON.stringify(newSettings));
+                    // Gemini Key is saved in its own useEffect due to different key
                 }
             };
-            
+
             useEffect(() => {
                 if (isJoined && tasks.length > 0 && tgToken && tgChatId) {
                     const todayStr = new Date().toISOString().split('T')[0];
-                    const lastCheckKey = `last_expiry_notify_date_${workspaceId}`; 
+                    const lastCheckKey = `last_expiry_notify_date_${workspaceId}`;
                     const lastCheck = localStorage.getItem(lastCheckKey);
-                    
+
                     if (lastCheck !== todayStr) {
                         const expiringTasks = tasks.filter(t => !t.completed && !t.isDeleted && t.expiry && checkIsExpiringSoon(t.expiry, notifyDays));
                         if (expiringTasks.length > 0) {
@@ -2100,25 +2277,25 @@
                 if (activeTagFilters.size > 0) {
                     const activeTags = Array.from(activeTagFilters);
                     // Filter: Must contain AT LEAST ONE of the selected tags
-                    result = result.filter(t => 
+                    result = result.filter(t =>
                         (t.tags || []).some(tag => activeTags.includes(tag))
                     );
                 }
 
                 if (searchQuery.trim()) {
                     const q = searchQuery.toLowerCase();
-                    result = result.filter(t => 
-                        (t.productName||'').toLowerCase().includes(q) || 
-                        (t.serial||'').toLowerCase().includes(q) || 
+                    result = result.filter(t =>
+                        (t.productName||'').toLowerCase().includes(q) ||
+                        (t.serial||'').toLowerCase().includes(q) ||
                         (t.note||'').toLowerCase().includes(q) ||
                         (t.tags||[]).some(tag => tag.toLowerCase().includes(q)) // Search within tags
                     );
                 }
-                
+
                 result.sort((a, b) => {
                     const isDupA = duplicateSerials.has(a.serial);
                     const isDupB = duplicateSerials.has(b.serial);
-                    
+
                     // 1. 重複的票券移到最上面且相鄰
                     if (isDupA && !isDupB) return -1;
                     if (!isDupA && isDupB) return 1;
@@ -2127,19 +2304,19 @@
                     if (isDupA && isDupB) {
                         return a.serial.localeCompare(b.serial);
                     }
-                    
+
                     if (sortType === 'newest') {
                         return (b.createdAt || 0) - (a.createdAt || 0);
-                    } 
-                    
+                    }
+
                     if (sortType === 'expiring') {
-                        const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); 
+                        const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
                         const dateB = b.expiry ? new Date(b.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
-                        return dateA.getTime() - dateB.getTime(); 
+                        return dateA.getTime() - dateB.getTime();
                     } else if (sortType === 'oldest') {
-                         return (a.createdAt || 0) - (b.createdAt || 0); 
+                         return (a.createdAt || 0) - (b.createdAt || 0);
                     } else {
-                        const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); 
+                        const dateA = a.expiry ? new Date(a.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
                         const dateB = b.expiry ? new Date(b.expiry.replace(/[\.\-]/g, '/')) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
                         return dateA.getTime() - dateB.getTime();
                     }
@@ -2175,24 +2352,22 @@
 
             const handleExportTasks = (tasksToExport) => {
                 if (tasksToExport.length === 0) {
-                    // alert("沒有選擇任何票券進行匯出。"); // 請改用客製化 Modal UI 替代 alert()
-                    console.warn("沒有選擇任何票券進行匯出。");
+                    alert("沒有選擇任何票券進行匯出。");
                     return;
                 }
                 const dataStr = JSON.stringify(tasksToExport, null, 2);
                 const blob = new Blob([dataStr], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
-                const a = document.createElement('a'); a.href = url; 
+                const a = document.createElement('a'); a.href = url;
                 a.download = `ticket_export_${new Date().toISOString().split('T')[0]}_${tasksToExport.length}items.json`;
                 a.click(); URL.revokeObjectURL(url);
-                // alert(`✅ 已成功匯出 ${tasksToExport.length} 筆票券！`); // 請改用客製化 Modal UI 替代 alert()
-                console.log(`✅ 已成功匯出 ${tasksToExport.length} 筆票券！`);
+                alert(`✅ 已成功匯出 ${tasksToExport.length} 筆票券！`);
             };
 
             const handleExportSelected = () => {
                 const tasksToExport = tasks.filter(t => selectedTasks.has(t.id));
                 handleExportTasks(tasksToExport);
-                setIsSelectionMode(false); 
+                setIsSelectionMode(false);
                 setSelectedTasks(new Set());
                 setShowBatchEditPanel(false);
             };
@@ -2200,7 +2375,7 @@
             const handleBatchAdd = (newTasks) => {
                 setTasks(prev => [...newTasks, ...prev]);
                 setViewStatus('active');
-                
+
                 // Add new tags to global list if they don't exist
                 const newTags = newTasks.flatMap(t => t.tags || []).filter(t => t && !tags.includes(t));
                 if (newTags.length > 0) {
@@ -2216,8 +2391,8 @@
 
                 setTasks(prev => prev.map(t => t.id === id ? { ...t, productName: name, serial, expiry, image, images, url, note, tags, createdAt: newCreatedAt || t.createdAt } : t));
             };
-            
-            const handleToggleComplete = (task) => { 
+
+            const handleToggleComplete = (task) => {
                 const newStatus = !task.completed;
                 if (newStatus === true && tgToken && tgChatId) {
                     const msg = `🎫 *票券已使用完畢* \n\n📦 *品名*: ${task.productName || '未命名'} \n🔢 *序號*: \`${task.serial || '無'}\` \n📅 *期限*: ${task.expiry || '無'} \n⏰ *時間*: ${new Date().toLocaleString('zh-TW')}`;
@@ -2225,30 +2400,26 @@
                 }
                 setTasks(prev => prev.map(t => t.id === task.id ? { ...t, completed: newStatus, completedAt: newStatus ? Date.now() : null } : t));
             };
-            
+
             const handleDelete = (id) => { setTasks(prev => prev.map(t => t.id === id ? { ...t, isDeleted: true, deletedAt: Date.now() } : t)); };
             const handleRestore = (task) => { setTasks(prev => prev.map(t => t.id === task.id ? { ...t, isDeleted: false, completed: false } : t)); };
-            const handlePermanentDelete = (id) => { 
-                // if (confirm("永久刪除？")) setTasks(prev => prev.filter(t => t.id !== id)); // 請改用客製化 Modal UI 替代 confirm()
-                if (window.confirm("永久刪除？")) setTasks(prev => prev.filter(t => t.id !== id));
-            };
-            
-            const handleBatchDelete = () => { 
-                if (!selectedTasks.size) return; 
+            const handlePermanentDelete = (id) => { if (confirm("永久刪除？")) setTasks(prev => prev.filter(t => t.id !== id)); };
+
+            const handleBatchDelete = () => {
+                if (!selectedTasks.size) return;
                 const isRecycleBin = viewStatus === 'deleted';
-                // if(confirm(isRecycleBin ? `確定要永久刪除這 ${selectedTasks.size} 個項目嗎？` : `確定要將這 ${selectedTasks.size} 個項目移至回收桶嗎？`)) { // 請改用客製化 Modal UI 替代 confirm()
-                if(window.confirm(isRecycleBin ? `確定要永久刪除這 ${selectedTasks.size} 個項目嗎？` : `確定要將這 ${selectedTasks.size} 個項目移至回收桶嗎？`)) {
+                if(confirm(isRecycleBin ? `確定要永久刪除這 ${selectedTasks.size} 個項目嗎？` : `確定要將這 ${selectedTasks.size} 個項目移至回收桶嗎？`)) {
                     if (isRecycleBin) setTasks(prev => prev.filter(t => !selectedTasks.has(t.id)));
                     else setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, isDeleted: true } : t));
-                    setIsSelectionMode(false); setSelectedTasks(new Set()); 
+                    setIsSelectionMode(false); setSelectedTasks(new Set());
                     setShowBatchEditPanel(false);
                 }
             };
-            
+
             const handleBatchUpdateName = (name) => {
                 setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, productName: name } : t));
             };
-            
+
             // New Batch Tag Handler: Adds one tag to all selected tickets
             const handleBatchAddTag = (tag) => {
                 // Ensure tag is in global list first
@@ -2271,7 +2442,7 @@
                 const mainImg = images[0];
                 setTasks(prev => prev.map(t => selectedTasks.has(t.id) ? { ...t, image: mainImg, images: images } : t));
             };
-            
+
             const handleSelectAll = () => {
                 if (filteredTasks.length === 0) return;
                 const allSelected = filteredTasks.every(task => selectedTasks.has(task.id));
@@ -2281,16 +2452,16 @@
                 setSelectedTasks(newSet);
             };
 
-            const handleSelect = (id) => { 
-                const newSet = new Set(selectedTasks); 
-                if (newSet.has(id)) newSet.delete(id); else newSet.add(id); 
-                setSelectedTasks(newSet); 
+            const handleSelect = (id) => {
+                const newSet = new Set(selectedTasks);
+                if (newSet.has(id)) newSet.delete(id); else newSet.add(id);
+                setSelectedTasks(newSet);
             };
 
-            const handleBatchRestore = async (data, mode) => { 
-                const newTasks = data.map(item => ({ 
-                    ...item, 
-                    id: 'restored_' + Date.now() + '_' + Math.random().toString(36).substr(2,9), 
+            const handleBatchRestore = async (data, mode) => {
+                const newTasks = data.map(item => ({
+                    ...item,
+                    id: 'restored_' + Date.now() + '_' + Math.random().toString(36).substr(2,9),
                     createdAt: item.createdAt || Date.now(),
                     // Apply backward compatibility on restore if needed
                     tags: Array.isArray(item.tags) ? item.tags : (item.tag && item.tag !== 'default' ? [item.tag] : []),
@@ -2321,8 +2492,7 @@
                         // Also add to global tags list if it's new
                         if (!tags.includes(tag)) setTags(prevTags => [...prevTags, tag]);
                     } else if (action === 'remove' && newTags.includes(tag)) {
-                        // if (confirm(`確定從「${t.productName}」移除標籤「${tag}」嗎？`)) { // 請改用客製化 Modal UI 替代 confirm()
-                        if (window.confirm(`確定從「${t.productName}」移除標籤「${tag}」嗎？`)) {
+                        if (confirm(`確定從「${t.productName}」移除標籤「${tag}」嗎？`)) {
                             newTags = newTags.filter(t => t !== tag);
                         } else {
                             return t;
@@ -2335,7 +2505,7 @@
             // Tag Filter Handler (Multi-select / OR logic)
             const handleTagFilterToggle = (tag) => {
                 // Deselect any special filter when selecting a custom tag
-                setCurrentSpecialFilter('custom'); 
+                setCurrentSpecialFilter('custom');
 
                 setActiveTagFilters(prev => {
                     const newSet = new Set(prev);
@@ -2349,7 +2519,7 @@
                     return newSet;
                 });
             };
-            
+
             // Special Filter Handler (Single Select)
             const handleSpecialFilterChange = (filter) => {
                 setActiveTagFilters(new Set()); // Clear multi-select tags
@@ -2390,7 +2560,7 @@
                         <div className="max-w-3xl mx-auto px-4 py-3">
                             <div className="flex justify-between items-center mb-3">
                                 <h1 className="font-extrabold text-lg text-slate-800 dark:text-white flex items-center gap-2">
-                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V3.0.1</span>
+                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V3.1</span>
                                 </h1>
                                 <div className="flex items-center gap-3">
                                     <button onClick={()=>setIsDarkMode(!isDarkMode)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
@@ -2401,7 +2571,7 @@
                                         {isMenuOpen && (
                                             <div className="absolute right-0 top-full mt-1 bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-xl shadow-xl p-1 min-w-[150px] z-50 animate-in">
                                                 <div className="px-3 py-2 text-xs font-bold text-slate-400 border-b border-slate-100 dark:border-slate-700 mb-1">ID: {workspaceId}</div>
-                                                <button onClick={() => { setShowSettings(true); setIsMenuOpen(false); }} className="w-full text-left px-3 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-slate-700 rounded-lg flex gap-2"><BellRing size={16} /> 通知設定</button>
+                                                <button onClick={() => { setShowSettings(true); setIsMenuOpen(false); }} className="w-full text-left px-3 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-slate-700 rounded-lg flex gap-2"><BellRing size={16} /> 通知/AI 設定</button>
                                                 <button onClick={() => { setShowDataTools(true); setIsMenuOpen(false); }} className="w-full text-left px-3 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-slate-700 rounded-lg flex gap-2"><Database size={16} /> 備份還原</button>
                                                 <button onClick={() => { localStorage.removeItem('ticket_offline_workspace_id'); setIsJoined(false); }} className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg flex gap-2"><LogIn size={16}/> 登出 (切換清單)</button>
                                             </div>
@@ -2423,7 +2593,7 @@
                             <div className="flex gap-2 overflow-x-auto no-scrollbar items-center pb-1">
                                 {/* Special Filters (Single Select) */}
                                 <button onClick={() => handleSpecialFilterChange('all')} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap border transition-colors ${currentSpecialFilter === 'all' && activeTagFilters.size === 0 ? 'bg-slate-800 text-white border-slate-800 dark:bg-slate-200 dark:text-slate-900' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>全部</button>
-                                
+
                                 <button onClick={() => handleSpecialFilterChange('uncategorized')} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1 border transition-colors ${currentSpecialFilter === 'uncategorized' ? 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-800' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
                                     <Tag size={10} /> 未分類
                                 </button>
@@ -2433,7 +2603,7 @@
                                 <button onClick={() => handleSpecialFilterChange('no_expiry')} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1 border transition-colors ${currentSpecialFilter === 'no_expiry' ? 'bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
                                     <CalendarX2 size={10} /> 無期限
                                 </button>
-                                
+
                                 {/* Custom Tags (Multi-Select) */}
                                 {tags.map(tag => (
                                     <button key={tag} onClick={() => handleTagFilterToggle(tag)} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1 border transition-colors ${activeTagFilters.has(tag) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
@@ -2452,27 +2622,27 @@
                                 }} className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${isSelectionMode ? 'bg-slate-800 text-white dark:bg-white dark:text-slate-900' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'}`}>{isSelectionMode ? '完成選取' : '多選'}</button>
                                 {isSelectionMode && (
                                     <>
-                                        <button 
-                                            onClick={handleSelectAll} 
+                                        <button
+                                            onClick={handleSelectAll}
                                             className="text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 flex items-center gap-1 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors"
                                         >
-                                            <CheckSquareIcon size={12}/> 
+                                            <CheckSquareIcon size={12}/>
                                             {filteredTasks.length > 0 && filteredTasks.every(t => selectedTasks.has(t.id)) ? '取消全選' : '全選'}
                                         </button>
 
                                         {/* 批量編輯按鈕 */}
                                         {selectedTasks.size > 0 && (
-                                            <button 
-                                                onClick={() => setShowBatchEditPanel(true)} 
+                                            <button
+                                                onClick={() => setShowBatchEditPanel(true)}
                                                 className="text-xs font-bold px-3 py-1.5 rounded-lg bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 flex items-center gap-1"
                                             >
                                                 <Layers size={12}/> 批量編輯
                                             </button>
                                         )}
-                                        
+
                                         {/* 匯出已選按鈕 */}
                                         {selectedTasks.size > 0 && (
-                                            <button 
+                                            <button
                                                 onClick={handleExportSelected}
                                                 className="text-xs font-bold px-3 py-1.5 rounded-lg bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 flex items-center gap-1"
                                             >
@@ -2483,8 +2653,8 @@
                                         {/* 刪除按鈕 */}
                                         {selectedTasks.size > 0 && (
                                             <button onClick={handleBatchDelete} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 flex items-center gap-1">
-                                                <Trash size={12}/> 
-                                                {viewStatus === 'deleted' ? '永久刪除' : '刪除'} 
+                                                <Trash size={12}/>
+                                                {viewStatus === 'deleted' ? '永久刪除' : '刪除'}
                                                 ({selectedTasks.size})
                                             </button>
                                         )}
@@ -2512,11 +2682,11 @@
                         ) : (
                             <div className="space-y-4">
                                 {groupedTasks.map((group, groupIndex) => (
-                                    <div 
-                                        key={group.date} 
-                                        className={`rounded-xl shadow-md overflow-hidden p-3 transition-colors duration-300 
-                                            ${group.date === 'No Expiry' 
-                                                ? 'bg-orange-50/50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-800/30 mt-8' 
+                                    <div
+                                        key={group.date}
+                                        className={`rounded-xl shadow-md overflow-hidden p-3 transition-colors duration-300
+                                            ${group.date === 'No Expiry'
+                                                ? 'bg-orange-50/50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-800/30 mt-8'
                                                 : (groupIndex % 2 === 0 ? 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700' : 'bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50')
                                             }`}
                                     >
@@ -2526,25 +2696,25 @@
                                         </h4>
                                         <div className="space-y-1">
                                             {group.tasks.map(task => (
-                                                <TaskItem 
-                                                    key={task.id} 
-                                                    task={task} 
-                                                    tags={tags} 
+                                                <TaskItem
+                                                    key={task.id}
+                                                    task={task}
+                                                    tags={tags}
                                                     gallery={gallery}
                                                     presetNames={presetNames}
                                                     onAddToGallery={addToGallery}
                                                     onManagePresets={() => setShowPresetManager(true)}
-                                                    onToggle={handleToggleComplete} 
-                                                    onDelete={handleDelete} 
-                                                    onRestore={handleRestore} 
-                                                    onPermanentDelete={handlePermanentDelete} 
-                                                    onUpdateTicket={handleUpdateTicket} 
-                                                    isSelectionMode={isSelectionMode} 
-                                                    isSelected={selectedTasks.has(task.id)} 
-                                                    onSelect={handleSelect} 
-                                                    expiryThreshold={expiryThreshold} 
-                                                    isDuplicate={duplicateSerials.has(task.serial)} 
-                                                    isDarkMode={isDarkMode} 
+                                                    onToggle={handleToggleComplete}
+                                                    onDelete={handleDelete}
+                                                    onRestore={handleRestore}
+                                                    onPermanentDelete={handlePermanentDelete}
+                                                    onUpdateTicket={handleUpdateTicket}
+                                                    isSelectionMode={isSelectionMode}
+                                                    isSelected={selectedTasks.has(task.id)}
+                                                    onSelect={handleSelect}
+                                                    expiryThreshold={expiryThreshold}
+                                                    isDuplicate={duplicateSerials.has(task.serial)}
+                                                    isDarkMode={isDarkMode}
                                                     onManageTags={() => setShowTagManager(true)}
                                                     onPreviewImage={(src) => setPreviewImage(src)}
                                                     onToggleTag={handleToggleTag}
@@ -2557,7 +2727,7 @@
                         )}
                     </div>
 
-                    <button 
+                    <button
                         onClick={() => setIsAddModalOpen(true)}
                         className="fixed bottom-24 right-5 bg-blue-600 hover:bg-blue-700 text-white w-14 h-14 rounded-full shadow-xl shadow-blue-600/40 flex items-center justify-center z-40 transition-transform active:scale-90"
                     >
@@ -2565,28 +2735,29 @@
                     </button>
 
                     <BottomNav view={viewStatus} setView={setViewStatus} counts={{ active: tasks.filter(t=>!t.completed && !t.isDeleted).length }} />
-                    
-                    <AddTaskModal 
-                        isOpen={isAddModalOpen} 
-                        onClose={()=>setIsAddModalOpen(false)} 
-                        onAddBatch={handleBatchAdd} 
-                        tags={tags} 
-                        onManageTags={() => setShowTagManager(true)} 
+
+                    <AddTaskModal
+                        isOpen={isAddModalOpen}
+                        onClose={()=>setIsAddModalOpen(false)}
+                        onAddBatch={handleBatchAdd}
+                        tags={tags}
+                        onManageTags={() => setShowTagManager(true)}
                         gallery={gallery}
                         onAddToGallery={addToGallery}
                         presetNames={presetNames}
                         onManagePresets={() => setShowPresetManager(true)}
+                        geminiApiKey={geminiApiKey} // Pass API Key
                     />
-                    
+
                     {/* Batch Edit Panel (Modified Logic) */}
                     {showBatchEditPanel && (
-                        <BatchEditPanel 
-                            selectedCount={selectedTasks.size} 
-                            tags={tags} 
-                            onUpdateName={handleBatchUpdateName} 
+                        <BatchEditPanel
+                            selectedCount={selectedTasks.size}
+                            tags={tags}
+                            onUpdateName={handleBatchUpdateName}
                             onBatchAddTag={handleBatchAddTag} // New handler
                             onUpdateImage={handleBatchUpdateImage}
-                            onUpdateDate={handleBatchUpdateDate} 
+                            onUpdateDate={handleBatchUpdateDate}
                             gallery={gallery}
                             onAddToGallery={addToGallery}
                             onManageTags={() => setShowTagManager(true)}
@@ -2596,17 +2767,29 @@
                         />
                     )}
 
-                    <TagManagerModal 
-                        isOpen={showTagManager} 
-                        onClose={() => setShowTagManager(false)} 
-                        tags={tags} 
-                        onAddTag={(t)=>{if(!tags.includes(t)) setTags([...tags,t])}} 
+                    <TagManagerModal
+                        isOpen={showTagManager}
+                        onClose={() => setShowTagManager(false)}
+                        tags={tags}
+                        onAddTag={(t)=>{if(!tags.includes(t)) setTags([...tags,t])}}
                         onDeleteTag={handleTagDelete} // Uses new global deletion logic
                         onRenameTag={handleTagRename} // Uses new global rename logic
                     />
                     <PresetManagerModal isOpen={showPresetManager} onClose={() => setShowPresetManager(false)} presets={presetNames} onAddPreset={(n)=>{if(!presetNames.includes(n)) setPresetNames([...presetNames,n])}} onDeletePreset={(n)=>{setPresetNames(presetNames.filter(x=>x!==n))}} />
                     {showDataTools && <DataToolsModal isOpen={showDataTools} onClose={() => setShowDataTools(false)} tasks={tasks} onRestore={handleBatchRestore} onFullExport={handleExportTasks}/>}
-                    {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} tgToken={tgToken} setTgToken={setTgToken} tgChatId={tgChatId} setTgChatId={setTgChatId} notifyDays={notifyDays} setNotifyDays={setNotifyDays} onSave={handleSaveSettings} />}
+                    {showSettings && <SettingsModal 
+                        isOpen={showSettings} 
+                        onClose={() => setShowSettings(false)} 
+                        tgToken={tgToken} 
+                        setTgToken={setTgToken} 
+                        tgChatId={tgChatId} 
+                        setTgChatId={setTgChatId} 
+                        notifyDays={notifyDays} 
+                        setNotifyDays={setNotifyDays} 
+                        geminiApiKey={geminiApiKey} 
+                        setGeminiApiKey={setGeminiApiKey}
+                        onSave={handleSaveSettings} 
+                    />}
                     {previewImage && <ImagePreviewModal src={previewImage} onClose={() => setPreviewImage(null)} />}
                 </div>
             );
@@ -2617,3 +2800,4 @@
     </script>
 </body>
 </html>
+
