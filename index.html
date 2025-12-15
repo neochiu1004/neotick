@@ -150,7 +150,10 @@
             if (!apiKey) throw new Error("API Key 未設定。");
             if (!text.trim()) throw new Error("請貼上要解析的文字。");
 
-            const apiUrl = \https://www.google.com/search?q=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent%3Fkey%3D${apiKey}`;`
+            // 修正模型名稱為可用的預覽模型 gemini-2.5-flash-preview-09-2025
+            const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
+            
             const userQuery = `請解析以下文字內容，該內容可能包含一筆或多筆電子票券資訊，可能是簡訊、Email 內容或其他雜亂的文字。請找出所有的票券資訊並以 JSON Array 格式回傳。
 
 原始文字:
@@ -197,21 +200,41 @@ ${text}
                 }
             };
 
-            const response = await fetch(apiUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            let response;
+            try {
+                // 實作指數退避 (Exponential Backoff) 以處理潛在的限流問題
+                for (let attempt = 0; attempt < 3; attempt++) {
+                    response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
 
-            if (!response.ok) {
-                const errorBody = await response.text();
-                throw new Error(`Gemini API 呼叫失敗: ${response.status} - ${errorBody.substring(0, 100)}`);
+                    if (response.ok) break; // 成功，跳出迴圈
+
+                    if (response.status === 429 && attempt < 2) {
+                        const delay = Math.pow(2, attempt) * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    } else {
+                        // 如果不是 429 或已達最大嘗試次數，則拋出錯誤
+                        const errorBody = await response.text();
+                        throw new Error(`Gemini API 呼叫失敗: ${response.status} - ${errorBody.substring(0, 100)}`);
+                    }
+                }
+            } catch (networkError) {
+                 throw new Error(`網路錯誤或 API 呼叫失敗: ${networkError.message}`);
             }
+
 
             const result = await response.json();
             const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
             
             if (!jsonText) {
+                // 檢查是否有 block reason
+                const blockReason = result.candidates?.[0]?.finishReason;
+                if (blockReason) {
+                     throw new Error(`AI 回覆被阻擋或篩選: ${blockReason}`);
+                }
                 throw new Error("Gemini 未回傳有效的 JSON 內容。");
             }
             
@@ -1470,7 +1493,9 @@ ${text}
                     const aiParsedItems = aiResults.map((item, index) => {
                         // 統一處理 AI 提供的資訊，轉換為 App 內部格式
                         const finalName = batchName.trim() || item.productName || "AI 解析票券";
-                        const finalTags = [...new Set([...batchTags, ...(item.tags || [])])];
+                        // 將 AI 提供的 tags 陣列和使用者預設的 batchTags 合併
+                        const combinedTags = [...(item.tags || []), ...batchTags];
+                        const finalTags = [...new Set(combinedTags.filter(t => t && t.trim()))];
                         
                         return {
                             id: 'ai_task_' + now + '_' + index + '_' + Math.random().toString(36).substr(2,5),
@@ -1478,15 +1503,15 @@ ${text}
                             originalRaw: item.originalRaw || pasteVal,
                             isTicket: !!item.serial,
                             serial: (item.serial || "").replace(/\s/g, ''),
-                            productName: finalName,
                             expiry: item.expiry || '',
+                            productName: finalName,
                             tags: finalTags,
                             images: pendingImages || [],
                             image: pendingMainImage || (pendingImages.length > 0 ? pendingImages[0] : ''),
                             completed: false,
                             isDeleted: false,
                             createdAt: now,
-                            note: `AI 備註: ${item.originalRaw || '無原始段落'}`,
+                            note: `AI 原始段落: ${item.originalRaw || '無'}`,
                             url: '',
                         };
                     });
