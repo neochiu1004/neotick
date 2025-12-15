@@ -184,7 +184,7 @@ ${text}
 1. productName: string, 提取品名，並移除所有空格。
 2. serial: string, 提取序號/代碼，並移除前兩碼流水號（如果存在且是數字）。
 3. expiry: string, 提取有效期限，格式為 YYYY/MM/DD。
-4. tags: string[], 根據品名自動生成 1~2 個合適的中文標籤 (例如：星巴克 -> ["咖啡", "飲品"])。
+4. tags: string[], 根據品名自動生成 1~2 個合適的中文標籤 (例如：星巴克 、85度C、咖啡、蛋糕、幣)。
 5. originalRaw: string, 該票券資訊在原始文字中的完整段落或最相關句子。`;
 
             const payload = {
@@ -2742,7 +2742,7 @@ ${text}
                             <div className="flex items-center gap-2 flex-shrink-0">
                                 <div className="flex items-center gap-1 bg-amber-50 dark:bg-amber-900/20 px-2 py-1 rounded-md border border-amber-100 dark:border-amber-800/30">
                                     <Clock size={12} className="text-amber-500" />
-                                    <select value={expiryThreshold} onChange={(e) => setExpiryThreshold(parseInt(e.target.value))} className="bg-transparent outline-none font-bold text-amber-800 dark:text-amber-500 text-[10px]"><option value="7">7天</option><option value="14">14天</option><option value="30">30天</option><option value="90">90天</option></select>
+                                    <select value={expiryThreshold} onChange={(e) => setExpiryThreshold(parseInt(e.target.value))} className="bg-transparent outline-none font-bold text-amber-800 dark:text-amber-500 text-[10px]"><option value="7">7天</option><option value="14">14天</option><option value="30">30天</option><option value="180">半年</option></select>
                                 </div>
                                 <select value={sortType} onChange={(e)=>setSortType(e.target.value)} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 text-xs rounded-lg py-1.5 px-2 outline-none font-bold">
                                     <option value="expiring">快到期</option><option value="newest">最新</option><option value="oldest">最早</option>
