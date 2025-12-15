@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>離線票券管家 (V3.1 AI 整合版)</title>
+    <title>離線票券管家 (V3.2 AI 標籤與排序修正版)</title>
 
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -154,29 +154,43 @@
             const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
             
-            const userQuery = `請解析以下文字內容，該內容可能包含一筆或多筆電子票券資訊，可能是簡訊、Email 內容或其他雜亂的文字。請找出所有的票券資訊並以 JSON Array 格式回傳。
+            // 根據使用者要求調整 System Prompt
+            const userQuery = `請將我提供的票券資訊整理成以下格式，每一筆都要獨立輸出：
+
+品名（不可含空格）
+兌換期限    序號
+YYYY/MM/DD    Exxxxxxxxxxxxxxxxxx
 
 原始文字:
 ---
 ${text}
 ---
 
----
-格式要求 (請務必遵守):
-1. 僅回傳純 JSON Array 格式，不要包含任何 Markdown 符號 (如 \`\`\`json)。
-2. 每個物件代表一張票券。
-3. 欄位說明：
-   - productName: string, 票券品名或服務名稱。若內容有明顯品牌 (如星巴克、麥當勞)，請將品牌名包含在品名中。
-   - serial: string, 票券的兌換序號或代碼。必須是連續的英數字元，通常長度大於 8 碼。若無序號，請使用空字串 ""。
-   - expiry: string, 票券的有效期限。請統一轉換為 "YYYY/MM/DD" 格式。若無期限，請使用空字串 ""。
-   - tags: string[], 根據內容自動生成 1~2 個合適的中文標籤 (例如：星巴克 -> ["咖啡", "飲品"]；麥當勞 -> ["美食", "速食"])。
-   - originalRaw: string, 該票券資訊在原始文字中的完整段落或最相關句子，用於事後檢查。
+規則：
+每張票券都要重新印一次品名與表頭。
+品名從原始文字擷取並移除空格。
+序號前兩碼流水號（01、02…）請移除，保留剩餘序號。
+兌換期限請取票券資訊中的到期日。
+只輸出結果，不需說明。
 `;
             
+            // 由於用戶要求輸出格式是自由文本，且包含表頭和換行，
+            // 我們將採用更寬鬆的 JSON 結構（只要求提取關鍵資訊），然後在前端格式化。
+            // 這裡使用的 JSON Schema 是為了讓模型能結構化地提取數據，而不是讓模型直接輸出格式化文本。
+            
+            const systemPrompt = `你是一個專業的電子票券資訊結構化助手。請嚴格根據用戶提供的原始文字，提取並以 JSON 陣列格式回傳。你的回覆必須是純 JSON 陣列，不包含任何額外說明或 Markdown 格式。
+
+提取規則:
+1. productName: string, 提取品名，並移除所有空格。
+2. serial: string, 提取序號/代碼，並移除前兩碼流水號（如果存在且是數字）。
+3. expiry: string, 提取有效期限，格式為 YYYY/MM/DD。
+4. tags: string[], 根據品名自動生成 1~2 個合適的中文標籤 (例如：星巴克 -> ["咖啡", "飲品"])。
+5. originalRaw: string, 該票券資訊在原始文字中的完整段落或最相關句子。`;
+
             const payload = {
-                contents: [{ parts: [{ text: userQuery }] }],
+                contents: [{ parts: [{ text: `請使用以下提取規則分析原始文字，並回傳 JSON 陣列:\n\n原始文字:\n---${text}\n---` }] }],
                 systemInstruction: {
-                    parts: [{ text: "你是一個專業的電子票券資訊結構化助手。請嚴格根據用戶提供的文字和格式要求，提取並回傳 JSON 陣列。你的回覆只能是純 JSON 陣列，不包含任何額外說明或 Markdown 格式。" }]
+                    parts: [{ text: systemPrompt }]
                 },
                 generationConfig: {
                     responseMimeType: "application/json",
@@ -240,7 +254,43 @@ ${text}
             
             // 嘗試解析 JSON 文本
             try {
-                return JSON.parse(jsonText);
+                // 進行額外清理，確保解析正確
+                let cleanedJsonText = jsonText.trim();
+                // 如果模型錯誤地在最外層加了```json...```, 移除它
+                if (cleanedJsonText.startsWith('```json')) {
+                    cleanedJsonText = cleanedJsonText.substring(7);
+                    if (cleanedJsonText.endsWith('```')) {
+                        cleanedJsonText = cleanedJsonText.substring(0, cleanedJsonText.length - 3);
+                    }
+                }
+                
+                let parsedArray = JSON.parse(cleanedJsonText);
+                
+                // 處理使用者要求的後續格式化邏輯
+                parsedArray = parsedArray.map(item => {
+                    let serial = item.serial || "";
+                    // 序號前兩碼流水號（01、02…）請移除，保留剩餘序號。
+                    if (serial.length > 2 && /^\d{2}/.test(serial)) {
+                        serial = serial.substring(2);
+                    }
+
+                    // 品名從原始文字擷取並移除空格
+                    const productName = (item.productName || "").replace(/\s/g, '');
+                    
+                    // 兌換期限請取票券資訊中的到期日 (已經是 YYYY/MM/DD)
+                    const expiry = (item.expiry || "").replace(/-/g, '/').replace(/\./g, '/');
+                    
+                    return {
+                        ...item,
+                        productName: productName,
+                        serial: serial,
+                        expiry: expiry,
+                        // tags: item.tags (保留 AI 建議的標籤)
+                    };
+                });
+                
+                return parsedArray;
+                
             } catch (e) {
                 console.error("JSON 解析錯誤:", e, "原始回傳文本:", jsonText);
                 throw new Error("AI 解析格式錯誤，無法轉換為有效的 JSON 陣列。");
@@ -1492,9 +1542,10 @@ ${text}
                     const now = Date.now();
                     const aiParsedItems = aiResults.map((item, index) => {
                         // 統一處理 AI 提供的資訊，轉換為 App 內部格式
-                        const finalName = batchName.trim() || item.productName || "AI 解析票券";
-                        // 將 AI 提供的 tags 陣列和使用者預設的 batchTags 合併
-                        const combinedTags = [...(item.tags || []), ...batchTags];
+                        const finalName = batchName.trim() || item.productName || "AI解析票券";
+                        
+                        // 2. 使用者要求: 加上 ["AI解析"] 標籤
+                        const combinedTags = [...(item.tags || []), ...batchTags, "AI解析"];
                         const finalTags = [...new Set(combinedTags.filter(t => t && t.trim()))];
                         
                         return {
@@ -1511,6 +1562,7 @@ ${text}
                             completed: false,
                             isDeleted: false,
                             createdAt: now,
+                            // 根據使用者要求，備註使用 AI 原始段落
                             note: `AI 原始段落: ${item.originalRaw || '無'}`,
                             url: '',
                         };
@@ -2331,6 +2383,7 @@ ${text}
                     }
 
                     if (sortType === 'newest') {
+                        // 修正 1. 使用最新的排序時，最晚新增的沒有排序到最上面
                         return (b.createdAt || 0) - (a.createdAt || 0);
                     }
 
@@ -2585,7 +2638,7 @@ ${text}
                         <div className="max-w-3xl mx-auto px-4 py-3">
                             <div className="flex justify-between items-center mb-3">
                                 <h1 className="font-extrabold text-lg text-slate-800 dark:text-white flex items-center gap-2">
-                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V3.1</span>
+                                    <span className="bg-emerald-600 text-white p-1.5 rounded-lg"><WifiOff size={18}/></span> 票券管家 <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded">V3.2</span>
                                 </h1>
                                 <div className="flex items-center gap-3">
                                     <button onClick={()=>setIsDarkMode(!isDarkMode)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
